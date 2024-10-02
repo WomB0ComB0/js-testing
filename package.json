@@ -1,0 +1,21 @@
+{
+  "name": "js-testing",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@octokit/rest": "^21.0.2",
+    "@types/bun": "^1.1.10",
+    "@types/node": "^22.7.4",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "libsodium-wrappers": "^0.7.15",
+    "tweetsodium": "^0.0.6"
+  }
+}
