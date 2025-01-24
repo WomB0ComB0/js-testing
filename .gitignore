@@ -15,3 +15,4 @@ logs
 logs/*
 log/*
 log
+*.ics
