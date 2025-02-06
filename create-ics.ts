@@ -14,13 +14,13 @@ import type { ICalRepeatingOptions } from 'ical-generator/dist/index.d.ts';
  */
 // @ts-ignore
 const
-  monday = ICalWeekday.MO,
-  wednesday = ICalWeekday.WE, 
-  saturday = ICalWeekday.SA,
-  sunday = ICalWeekday.SU,
-  tuesday = ICalWeekday.TU,
-  thursday = ICalWeekday.TH,
-  friday = ICalWeekday.FR;
+    monday = ICalWeekday.MO,
+    wednesday = ICalWeekday.WE,
+    saturday = ICalWeekday.SA,
+    sunday = ICalWeekday.SU,
+    tuesday = ICalWeekday.TU,
+    thursday = ICalWeekday.TH,
+    friday = ICalWeekday.FR;
 
 /**
  * Array of event configurations
@@ -33,13 +33,13 @@ const
  * }>}
  */
 const events: { title: string; description: string; start: string; end: string; days: ICalWeekday[] }[] = [
-  {
-    title: "LeetCode Practice",
-    description: "Daily coding practice session", 
-    start: "19:00",
-    end: "20:00",
-    days: [sunday, tuesday, thursday, saturday]
-  }
+    {
+        title: "Twitch Stream",
+        description: "Live coding and programming stream on Twitch",
+        start: "21:30",
+        end: "23:00",
+        days: [monday, tuesday, wednesday, thursday, friday]
+    }
 ];
 
 /**
@@ -57,14 +57,14 @@ async function main(): Promise<void> {
             default: true,
         })
         .option('duration', {
-            alias: 'd', 
+            alias: 'd',
             type: 'number',
             description: 'How long the events should repeat (in days)',
             default: 90,
         })
         .option('timezone', {
             alias: 't',
-            type: 'string', 
+            type: 'string',
             description: 'Timezone for the events',
             default: 'America/New_York',
         })
