@@ -41,7 +41,7 @@ class Embedder {
     console.log('Pipeline initialized successfully');
   }
 
-  async embed(text: string, genres?: SpotifyGenres[]): Promise<PineconeRecord> {
+  async embed(text: string, genres: SpotifyGenres[]): Promise<PineconeRecord> {
     console.log('Starting embedding process for text:', text);
 
     if (!this.pipe) {
@@ -53,7 +53,7 @@ class Embedder {
     const result = await this.pipe(text, { pooling: 'mean', normalize: true });
     console.log('Raw embedding result generated');
 
-    const embedding = Array.from(result.data); // Convert to array of numbers
+    const embedding = Array.from(result.data);
     console.log('Generated embedding:', embedding);
 
     const record = {
@@ -62,7 +62,7 @@ class Embedder {
         text,
         genres: genres?.map((genre) => JSON.stringify(genre)) ?? [],
       },
-      values: embedding, // Use the full embedding vector
+      values: embedding,
     };
     console.log('Created Pinecone record:', record);
 

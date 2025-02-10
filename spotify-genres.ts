@@ -32,8 +32,8 @@ interface Config {
 }
 
 const config: Config = {
-  pineconeApiKey: process.env.PINECONE_API_KEY || 'pcsk_6XgYfG_Dq1zSKKxSSnnf3Av9DMAwNM7qVQXqCbxYN9XVjs7rSeD8gLKkpQA2JbLuZEXwPF',
-  pineconeIndexName: process.env.PINECONE_INDEX_NAME || 'hackbrown-search',
+  pineconeApiKey: process.env.PINECONE_API_KEY || '',
+  pineconeIndexName: process.env.PINECONE_INDEX_NAME || '',
   spotifyClientId: process.env.SPOTIFY_CLIENT_ID || '',
   spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET || '',
 };
@@ -166,11 +166,10 @@ class GenreService {
 
   private async generateEmbedding(text: string, genres?: string[]): Promise<number[]> {
     console.log(`Generating embedding for: ${text}`);
-    const record = await embedder.embed(text, genres ? [{
-      genres: [text],
-      subgenres: [],
-      genres_map: {}
-    }] : undefined);
+    const record = await embedder.embed(text, [{
+      genres: [genres?.[0]],
+      subgenres: [genres?.[1]],
+    }] as Omit<SpotifyGenres[], 'genres_map'>);
     return record.values;
   }
 }
