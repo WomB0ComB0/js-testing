@@ -1,4 +1,6 @@
-export const genres = {
+import { SpotifyGenres } from "./embedder";
+
+export const genres: SpotifyGenres = {
   "genres": [
     "Pop",
     "Electronic",

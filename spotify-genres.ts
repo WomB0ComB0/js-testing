@@ -4,7 +4,7 @@ import { SpotifyApi } from '@spotify/web-api-ts-sdk';
 import type { Track } from '@spotify/web-api-ts-sdk/src/types';
 import { genres } from './spotify-genre-search';
 import dotenv from 'dotenv';
-import { embedder } from './embedder';
+import { embedder, SpotifyGenres } from './embedder';
 
 dotenv.config();
 
@@ -32,7 +32,7 @@ interface Config {
 }
 
 const config: Config = {
-  pineconeApiKey: process.env.PINECONE_API_KEY || 'your-pinecone-api-key',
+  pineconeApiKey: process.env.PINECONE_API_KEY || 'pcsk_6XgYfG_Dq1zSKKxSSnnf3Av9DMAwNM7qVQXqCbxYN9XVjs7rSeD8gLKkpQA2JbLuZEXwPF',
   pineconeIndexName: process.env.PINECONE_INDEX_NAME || 'hackbrown-search',
   spotifyClientId: process.env.SPOTIFY_CLIENT_ID || '',
   spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET || '',
@@ -97,8 +97,10 @@ class PineconeService {
 class GenreService {
   constructor(
     private pineconeService: PineconeService,
-  ) {
-    embedder.init();
+  ) {}
+
+  async initialize() {
+    await embedder.init();
   }
 
   async uploadGenresToPinecone(genres: {
@@ -123,7 +125,7 @@ class GenreService {
 
       const vector: ProcessedVector = {
         id,
-        values: await this.generateEmbedding(genre),
+        values: await this.generateEmbedding(genre, [genre]), // Pass genres
         metadata: {
           genres: [genre],
         },
@@ -144,7 +146,7 @@ class GenreService {
 
         const vector: ProcessedVector = {
           id,
-          values: await this.generateEmbedding(subGenre),
+          values: await this.generateEmbedding(subGenre, [mainGenre, subGenre]), // Pass genres
           metadata: {
             genres: [mainGenre, subGenre],
           },
@@ -162,9 +164,13 @@ class GenreService {
     logger.info(`Successfully uploaded ${vectors.length} new genre vectors to Pinecone`);
   }
 
-  private async generateEmbedding(text: string): Promise<number[]> {
+  private async generateEmbedding(text: string, genres?: string[]): Promise<number[]> {
     console.log(`Generating embedding for: ${text}`);
-    const record = await embedder.embed(text);
+    const record = await embedder.embed(text, genres ? [{
+      genres: [text],
+      subgenres: [],
+      genres_map: {}
+    }] : undefined);
     return record.values;
   }
 }
@@ -175,15 +181,11 @@ async function main(): Promise<void> {
 
   try {
     const pineconeService = new PineconeService(config.pineconeApiKey, config.pineconeIndexName);
-    // const spotifyService = new SpotifyService(config.spotifyClientId, config.spotifyClientSecret);
     const genreService = new GenreService(pineconeService);
 
-    await genreService.uploadGenresToPinecone(genres);
+    await genreService.initialize();
 
-    // Example: Search for tracks
-    // const genresToMatch = ['Pop', 'Rock'];
-    // const matchingTracks = await spotifyService.searchTracks(genresToMatch);
-    // logger.info(`Found ${matchingTracks.length} matching tracks`);
+    await genreService.uploadGenresToPinecone(genres);
 
     logger.info('Pipeline completed successfully');
   } catch (error) {
