@@ -32,8 +32,8 @@ interface Config {
 }
 
 const config: Config = {
-  pineconeApiKey: process.env.PINECONE_API_KEY || '',
-  pineconeIndexName: process.env.PINECONE_INDEX_NAME || '',
+  pineconeApiKey: process.env.PINECONE_API_KEY || 'pcsk_6XgYfG_Dq1zSKKxSSnnf3Av9DMAwNM7qVQXqCbxYN9XVjs7rSeD8gLKkpQA2JbLuZEXwPF',
+  pineconeIndexName: process.env.PINECONE_INDEX_NAME || 'hackbrown-search',
   spotifyClientId: process.env.SPOTIFY_CLIENT_ID || '',
   spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET || '',
 };
@@ -103,11 +103,7 @@ class GenreService {
     await embedder.init();
   }
 
-  async uploadGenresToPinecone(genres: {
-    genres: string[];
-    subgenres: string[];
-    genres_map: Record<string, string[]>;
-  }): Promise<void> {
+  async uploadGenresToPinecone(genres: SpotifyGenres): Promise<void> {
     logger.info('Starting genre upload to Pinecone');
 
     const vectors: ProcessedVector[] = [];
@@ -125,7 +121,7 @@ class GenreService {
 
       const vector: ProcessedVector = {
         id,
-        values: await this.generateEmbedding(genre, [genre]), // Pass genres
+        values: await this.generateEmbedding(genre),
         metadata: {
           genres: [genre],
         },
@@ -133,7 +129,7 @@ class GenreService {
       vectors.push(vector);
     }
 
-    // Process subgenres
+    // Process subgenres from genres_map
     for (const [mainGenre, subGenres] of Object.entries(genres.genres_map)) {
       for (const subGenre of subGenres) {
         if (!isValidString(subGenre)) continue;
@@ -146,7 +142,7 @@ class GenreService {
 
         const vector: ProcessedVector = {
           id,
-          values: await this.generateEmbedding(subGenre, [mainGenre, subGenre]), // Pass genres
+          values: await this.generateEmbedding(subGenre),
           metadata: {
             genres: [mainGenre, subGenre],
           },
@@ -164,11 +160,10 @@ class GenreService {
     logger.info(`Successfully uploaded ${vectors.length} new genre vectors to Pinecone`);
   }
 
-  private async generateEmbedding(text: string, genres?: string[]): Promise<number[]> {
+  private async generateEmbedding(text: string): Promise<number[]> {
     console.log(`Generating embedding for: ${text}`);
     const record = await embedder.embed(text, [{
-      genres: [genres?.[0]],
-      subgenres: [genres?.[1]],
+      genres: [text],
     }] as Omit<SpotifyGenres[], 'genres_map'>);
     return record.values;
   }
