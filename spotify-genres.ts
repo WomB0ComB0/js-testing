@@ -1,12 +1,14 @@
 import { Pinecone } from '@pinecone-database/pinecone';
 import winston from 'winston';
 import { SpotifyApi } from '@spotify/web-api-ts-sdk';
-import type { Track } from '@spotify/web-api-ts-sdk/src/types'
+import type { Track } from '@spotify/web-api-ts-sdk/src/types';
 import { genres } from './spotify-genre-search';
 import dotenv from 'dotenv';
+import { embedder } from './embedder';
 
 dotenv.config();
 
+// Logger configuration
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -16,11 +18,12 @@ const logger = winston.createLogger({
   transports: [
     new winston.transports.File({ filename: 'error.log', level: 'error' }),
     new winston.transports.Console({
-      format: winston.format.simple()
-    })
-  ]
+      format: winston.format.simple(),
+    }),
+  ],
 });
 
+// Configuration interface
 interface Config {
   pineconeApiKey: string;
   pineconeIndexName: string;
@@ -29,12 +32,13 @@ interface Config {
 }
 
 const config: Config = {
-  pineconeApiKey: process.env.PINECONE_API_KEY || '',
+  pineconeApiKey: process.env.PINECONE_API_KEY || 'your-pinecone-api-key',
   pineconeIndexName: process.env.PINECONE_INDEX_NAME || 'hackbrown-search',
   spotifyClientId: process.env.SPOTIFY_CLIENT_ID || '',
-  spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET || ''
+  spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET || '',
 };
 
+// Processed vector interface
 interface ProcessedVector {
   id: string;
   values: number[];
@@ -43,51 +47,71 @@ interface ProcessedVector {
   };
 }
 
+// Utility function to validate strings
 const isValidString = (value: string): boolean => typeof value === 'string' && value.length > 0;
 
-/**
- * Searches Spotify for tracks matching the given genres
- * @param genresToMatch The genres to search within
- * @returns Promise<SpotifyApi.TrackObjectFull[]> The matching tracks
- */
-async function searchSpotifyTracks(genresToMatch: string[]): Promise<Track[]> {
-  const spotify = SpotifyApi.withClientCredentials(config.spotifyClientId, config.spotifyClientSecret);
+// Spotify service
+class SpotifyService {
+  private spotify: SpotifyApi;
 
-  const searchQuery = `genre:${genresToMatch.join(',')}`;
-  const searchResults = await spotify.search(searchQuery, ['track'], undefined, 10);
+  constructor(private clientId: string, private clientSecret: string) {
+    this.spotify = SpotifyApi.withClientCredentials(clientId, clientSecret);
+  }
 
-  return searchResults.tracks.items;
+  async searchTracks(genresToMatch: string[]): Promise<Track[]> {
+    const searchQuery = `genre:${genresToMatch.join(',')}`;
+    const searchResults = await this.spotify.search(searchQuery, ['track'], undefined, 10);
+    return searchResults.tracks.items;
+  }
 }
 
-/**
- * Uploads genre data to Pinecone vector database
- * @param genres The genre data to upload
- * @returns Promise<void>
- */
-async function uploadGenresToPinecone(
-  genres: {
+// Pinecone service
+class PineconeService {
+  private pinecone: Pinecone;
+  private index: ReturnType<Pinecone['index']>;
+
+  constructor(private apiKey: string, private indexName: string) {
+    this.pinecone = new Pinecone({ apiKey });
+    this.index = this.pinecone.index(indexName);
+  }
+
+  async fetchExistingVectors(ids: string[]): Promise<Set<string>> {
+    const existingVectors = new Set<string>();
+    const existingVectorsList = await this.index.fetch(ids);
+    for (const id of Object.keys(existingVectorsList.records)) {
+      existingVectors.add(id);
+    }
+    return existingVectors;
+  }
+
+  async upsertVectors(vectors: ProcessedVector[], batchSize: number = 100): Promise<void> {
+    for (let i = 0; i < vectors.length; i += batchSize) {
+      const batch = vectors.slice(i, i + batchSize);
+      await this.index.upsert(batch);
+      logger.info(`Uploaded batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(vectors.length / batchSize)}`);
+    }
+  }
+}
+
+// Genre service
+class GenreService {
+  constructor(
+    private pineconeService: PineconeService,
+  ) {
+    embedder.init();
+  }
+
+  async uploadGenresToPinecone(genres: {
     genres: string[];
     subgenres: string[];
     genres_map: Record<string, string[]>;
-  }
-): Promise<void> {
-  logger.info('Starting genre upload to Pinecone');
-
-  try {
-    const pinecone = new Pinecone({
-      apiKey: config.pineconeApiKey,
-    });
-
-    const index = pinecone.index(config.pineconeIndexName);
+  }): Promise<void> {
+    logger.info('Starting genre upload to Pinecone');
 
     const vectors: ProcessedVector[] = [];
-    const existingVectors = new Set<string>();
+    const existingVectors = await this.pineconeService.fetchExistingVectors(['genre_*', 'subgenre_*']);
 
-    const existingVectorsList = await index.fetch(['genre_*', 'subgenre_*']);
-    for (const id of Object.keys(existingVectorsList.records)) { 
-      existingVectors.add(id); 
-    }
-
+    // Process main genres
     for (const genre of genres.genres) {
       if (!isValidString(genre)) continue;
 
@@ -99,7 +123,7 @@ async function uploadGenresToPinecone(
 
       const vector: ProcessedVector = {
         id,
-        values: [1],
+        values: await this.generateEmbedding(genre),
         metadata: {
           genres: [genre],
         },
@@ -107,6 +131,7 @@ async function uploadGenresToPinecone(
       vectors.push(vector);
     }
 
+    // Process subgenres
     for (const [mainGenre, subGenres] of Object.entries(genres.genres_map)) {
       for (const subGenre of subGenres) {
         if (!isValidString(subGenre)) continue;
@@ -119,7 +144,7 @@ async function uploadGenresToPinecone(
 
         const vector: ProcessedVector = {
           id,
-          values: [1],
+          values: await this.generateEmbedding(subGenre),
           metadata: {
             genres: [mainGenre, subGenre],
           },
@@ -133,32 +158,32 @@ async function uploadGenresToPinecone(
       return;
     }
 
-    const BATCH_SIZE = 100;
-    for (let i = 0; i < vectors.length; i += BATCH_SIZE) {
-      const batch = vectors.slice(i, i + BATCH_SIZE);
-      await index.upsert(batch);
-      logger.info(`Uploaded batch ${Math.floor(i / BATCH_SIZE) + 1} of ${Math.ceil(vectors.length / BATCH_SIZE)}`);
-    }
-
+    await this.pineconeService.upsertVectors(vectors);
     logger.info(`Successfully uploaded ${vectors.length} new genre vectors to Pinecone`);
-  } catch (error) {
-    logger.error('Failed to upload genres to Pinecone', { error: (error as Error).stack });
-    throw error;
+  }
+
+  private async generateEmbedding(text: string): Promise<number[]> {
+    console.log(`Generating embedding for: ${text}`);
+    const record = await embedder.embed(text);
+    return record.values;
   }
 }
 
-/**
- * Main execution function
- */
+// Main execution function
 async function main(): Promise<void> {
   logger.info('Starting genre upload and search pipeline');
-  try {
-    await uploadGenresToPinecone(genres);
 
-    // Then perform the search as before
-    const genresToMatch = ['Pop', 'Rock'];
-    const matchingTracks = await searchSpotifyTracks(genresToMatch);
-    logger.info(`Found ${matchingTracks.length} matching tracks`);
+  try {
+    const pineconeService = new PineconeService(config.pineconeApiKey, config.pineconeIndexName);
+    // const spotifyService = new SpotifyService(config.spotifyClientId, config.spotifyClientSecret);
+    const genreService = new GenreService(pineconeService);
+
+    await genreService.uploadGenresToPinecone(genres);
+
+    // Example: Search for tracks
+    // const genresToMatch = ['Pop', 'Rock'];
+    // const matchingTracks = await spotifyService.searchTracks(genresToMatch);
+    // logger.info(`Found ${matchingTracks.length} matching tracks`);
 
     logger.info('Pipeline completed successfully');
   } catch (error) {
@@ -172,8 +197,9 @@ if (require.main === module) {
 }
 
 export {
-  uploadGenresToPinecone,
-  searchSpotifyTracks,
+  SpotifyService,
+  PineconeService,
+  GenreService,
   main,
-  type ProcessedVector
+  type ProcessedVector,
 };
