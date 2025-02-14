@@ -10,6 +10,8 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@google-cloud/firestore": "^7.11.0",
+    "@googlemaps/google-maps-services-js": "^3.4.0",
     "@octokit/rest": "^21.0.2",
     "@pinecone-database/pinecone": "^4.1.0",
     "@spotify/web-api-ts-sdk": "^1.2.0",
@@ -23,14 +25,20 @@
     "commander": "^13.1.0",
     "csv-parse": "^5.6.0",
     "dotenv": "^16.4.7",
+    "firebase": "^11.3.1",
+    "firebase-admin": "^13.1.0",
+    "geofirestore": "^5.2.0",
     "ical-generator": "^8.1.1",
     "icalts": "^0.0.2",
     "jszip": "^3.10.1",
     "libsodium-wrappers": "^0.7.15",
     "luxon": "^3.5.0",
+    "node-xlsx": "^0.24.0",
     "tweetsodium": "^0.0.6",
     "uuid": "^11.0.5",
     "winston": "^3.17.0",
+    "xls-parser": "^3.1.0",
+    "xlsx": "^0.18.5",
     "yargs": "^17"
   }
 }
