@@ -34,6 +34,7 @@
     "libsodium-wrappers": "^0.7.15",
     "luxon": "^3.5.0",
     "node-xlsx": "^0.24.0",
+    "puppeteer": "^24.2.1",
     "tweetsodium": "^0.0.6",
     "uuid": "^11.0.5",
     "winston": "^3.17.0",
