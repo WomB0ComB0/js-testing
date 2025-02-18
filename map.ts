@@ -1,6 +1,6 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
-
+import { $ } from 'bun';
 dotenv.config();
 
 class GoogleMapsService {
@@ -22,7 +22,12 @@ class GoogleMapsService {
       });
       // Only return the first result
       const topResult = response.data.results?.[0] || null;
-      console.log('Top Geocoding Result:', JSON.stringify(topResult, null, 2));
+      console.log('Geocoding')
+      console.log(Object.keys(response.data))
+      console.log({
+        results: response.data['results'][0],
+        status: response.data['status']
+      })
       return topResult;
     } catch (error) {
       console.error('Geocoding Error:', error);
@@ -40,7 +45,14 @@ class GoogleMapsService {
       });
       // Only return the first result
       const topResult = response.data.results?.[0] || null;
-      console.log('Top Places Result:', JSON.stringify(topResult, null, 2));
+      console.log('Place Search')
+      console.log(Object.keys(response.data))
+      console.log({
+        html_attributions: response.data['html_attributions'],
+        next_page_token: response.data['next_page_token'],
+        results: response.data['results'][0],
+        status: response.data['status']
+      })
       return topResult;
     } catch (error) {
       console.error('Places Search Error:', error);
