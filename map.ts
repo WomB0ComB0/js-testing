@@ -20,8 +20,10 @@ class GoogleMapsService {
           key: this.apiKey
         }
       });
-      console.log('Geocoding Response:', JSON.stringify(response.data, null, 2));
-      return response.data;
+      // Only return the first result
+      const topResult = response.data.results?.[0] || null;
+      console.log('Top Geocoding Result:', JSON.stringify(topResult, null, 2));
+      return topResult;
     } catch (error) {
       console.error('Geocoding Error:', error);
       throw error;
@@ -36,8 +38,10 @@ class GoogleMapsService {
           key: this.apiKey
         }
       });
-      console.log('Places Search Response:', JSON.stringify(response.data, null, 2));
-      return response.data;
+      // Only return the first result
+      const topResult = response.data.results?.[0] || null;
+      console.log('Top Places Result:', JSON.stringify(topResult, null, 2));
+      return topResult;
     } catch (error) {
       console.error('Places Search Error:', error);
       throw error;
