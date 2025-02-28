@@ -15,6 +15,7 @@ declare global {
       FIREBASE_UNIVERSE_DOMAIN: string;
       API_KEY: string;
       GOOGLE_MAPS_API_KEY: string;
+      FIRECRAWL_API_KEY: string;
     }
   }
 }
