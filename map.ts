@@ -1213,7 +1213,6 @@ async function main() {
   }
 }
 
-// Check if running as a script
 if (require.main === module) {
   main().catch(console.error);
 }
