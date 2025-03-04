@@ -1,5 +1,5 @@
 import { marked } from 'marked';
-import { $ } from 'bun';
+import type { MarkedOptions, Renderer, Tokens } from 'marked';
 import { Logger, LogLevel } from './logger';
 
 // Create a logger instance for this module
@@ -8,135 +8,199 @@ const logger = Logger.getLogger('MarkdownToText', {
   includeTimestamp: true
 });
 
-interface PlainTextRendererOptions {
+interface PlainTextRendererOptions extends MarkedOptions {
   spaces?: boolean;
 }
 
-interface MarkedOptions {
-  sanitize?: boolean;
-  mangle?: boolean;
-  headerIds?: boolean;
-  renderer?: any;
-}
-
-class PlainTextRenderer {
-  private options: PlainTextRendererOptions;
+class PlainTextRenderer implements Renderer {
+  parser: any;
+  options: PlainTextRendererOptions;
   private whitespaceDelimiter: string;
 
   constructor(options?: PlainTextRendererOptions) {
     this.options = options || {};
     this.whitespaceDelimiter = this.options.spaces ? ' ' : '\n';
+    this.parser = {
+      parse: (text: string) => text
+    };
     logger.debug('PlainTextRenderer initialized', { options: this.options });
   }
 
-  code(code: string, lang?: string, escaped?: boolean): string {
-    return this.whitespaceDelimiter + this.whitespaceDelimiter + code + this.whitespaceDelimiter + this.whitespaceDelimiter;
+  // Helper method to safely convert any value to string
+  private safeToString(value: any): string {
+    if (value == null) {
+      return '';
+    }
+    
+    if (typeof value === 'object') {
+      try {
+        return JSON.stringify(value);
+      } catch (e) {
+        logger.warn('Failed to stringify object', { error: e });
+        return '[Complex Object]';
+      }
+    }
+    
+    return String(value);
   }
 
-  blockquote(quote: string): string {
-    return '\t' + quote + this.whitespaceDelimiter;
+  // Renderer methods
+  space(): string {
+    return this.whitespaceDelimiter;
   }
 
-  html(html: string): string {
-    return html;
+  code(token: Tokens.Code): string {
+    return `${this.whitespaceDelimiter}${this.whitespaceDelimiter}${this.safeToString(token.text)}${this.whitespaceDelimiter}${this.whitespaceDelimiter}`;
   }
 
-  heading(text: string, level: number, raw: string): string {
-    return text;
+  blockquote(token: Tokens.Blockquote): string {
+    return `\t${this.safeToString(token.text)}${this.whitespaceDelimiter}`;
+  }
+
+  html(token: Tokens.HTML | Tokens.Tag): string {
+    return this.safeToString(token.text);
+  }
+
+  heading(token: Tokens.Heading): string {
+    return this.safeToString(token.text);
   }
 
   hr(): string {
-    return this.whitespaceDelimiter + this.whitespaceDelimiter;
+    return `${this.whitespaceDelimiter}${this.whitespaceDelimiter}`;
   }
 
-  list(body: string, ordered: boolean): string {
-    return body;
+  list(token: Tokens.List): string {
+    return this.safeToString(token.items.map(item => item.text).join(this.whitespaceDelimiter));
   }
 
-  listitem(text: string): string {
-    return '\t' + text + this.whitespaceDelimiter;
+  listitem(token: Tokens.ListItem): string {
+    return `\t${this.safeToString(token.text)}${this.whitespaceDelimiter}`;
   }
 
-  paragraph(text: string): string {
-    return this.whitespaceDelimiter + text + this.whitespaceDelimiter;
+  paragraph(token: Tokens.Paragraph): string {
+    return `${this.whitespaceDelimiter}${this.safeToString(token.text)}${this.whitespaceDelimiter}`;
   }
 
-  table(header: string, body: string): string {
-    return this.whitespaceDelimiter + header + this.whitespaceDelimiter + body + this.whitespaceDelimiter;
+  table(token: Tokens.Table): string {
+    const header = token.header.map(cell => cell.text).join('\t');
+    const rows = token.rows.map(row => row.map(cell => cell.text).join('\t')).join(this.whitespaceDelimiter);
+    return `${this.whitespaceDelimiter}${header}${this.whitespaceDelimiter}${rows}${this.whitespaceDelimiter}`;
   }
 
-  tablerow(content: string): string {
-    return content + this.whitespaceDelimiter;
+  tablerow(token: Tokens.TableRow): string {
+    return `${this.safeToString(token.text)}${this.whitespaceDelimiter}`;
   }
 
-  tablecell(content: string, flags: { header: boolean; align: string }): string {
-    return content + '\t';
+  tablecell(token: Tokens.TableCell): string {
+    return `${this.safeToString(token.text)}\t`;
   }
 
-  strong(text: string): string {
-    return text;
+  strong(token: Tokens.Strong): string {
+    return this.safeToString(token.text);
   }
 
-  em(text: string): string {
-    return text;
+  em(token: Tokens.Em): string {
+    return this.safeToString(token.text);
   }
 
-  codespan(text: string): string {
-    return text;
+  codespan(token: Tokens.Codespan): string {
+    return this.safeToString(token.text);
   }
 
   br(): string {
-    return this.whitespaceDelimiter + this.whitespaceDelimiter;
+    return `${this.whitespaceDelimiter}${this.whitespaceDelimiter}`;
   }
 
-  del(text: string): string {
-    return text;
+  del(token: Tokens.Del): string {
+    return this.safeToString(token.text);
   }
 
-  link(href: string, title: string | null, text: string): string {
-    return text;
+  link(token: Tokens.Link): string {
+    return this.safeToString(token.text);
   }
 
-  image(href: string, title: string | null, text: string): string {
-    return text;
+  image(token: Tokens.Image): string {
+    return this.safeToString(token.text);
   }
 
-  text(text: string): string {
-    return text;
+  text(token: Tokens.Text | Tokens.Escape): string {
+    return this.safeToString(token.text);
   }
 
-  checkbox(checked: boolean): string {
-    return checked ? '[x]' : '[ ]';
+  checkbox(token: Tokens.Checkbox): string {
+    return token.checked ? '[x]' : '[ ]';
   }
 }
 
-const defaultOptions: MarkedOptions = {
-  sanitize: false,
-  mangle: false,
-  headerIds: false
-};
+const defaultOptions: MarkedOptions = {};
 
-function convertMarkdownToPlainText(markdownText: string, markedOptions: MarkedOptions = defaultOptions): Promise<string> {
-  return logger.time('Convert markdown to plain text', async () => {
-    try {
-      const renderer = new PlainTextRenderer();
-      marked.setOptions(markedOptions);
-      // @ts-ignore - The type definitions for marked don't match our custom renderer
-      const plainText = marked(markdownText, { renderer });
-      logger.debug('Markdown converted successfully', { 
-        inputLength: markdownText.length,
-        outputLength: plainText.length 
-      });
-      return convertASCIICharsToText(plainText);
-    } catch (error) {
-      logger.error('Failed to convert markdown to plain text', error);
-      throw error;
+function convertMarkdownToPlainText(markdownText: string, markedOptions: MarkedOptions = defaultOptions): string {
+  try {
+    const tokens = marked.lexer(markdownText);
+    let plainText = '';
+
+    const tocRegex = /(?:^|\n)(?:#+\s*(?:Table of Contents|Contents|TOC)\s*(?:\n+))(((?:\n*[\s]*\*.*\[.*\]\(.*\).*(?:\n|$))+))/i;
+    const tocMatch = markdownText.match(tocRegex);
+    let tableOfContents = '';
+    
+    if (tocMatch && tocMatch[1]) {
+      // Extract the table of contents section
+      tableOfContents = tocMatch[1];
+      
+      // Process the TOC links to make them plain text but preserve structure
+      tableOfContents = tableOfContents
+        .replace(/\*\s*\[(.*?)\]\(.*?\)/g, '• $1')  // Convert markdown links to bullet points
+        .replace(/\s{4}\*/g, '    •')               // Preserve indentation for nested items
+        .replace(/\s{8}\*/g, '        •');          // Preserve indentation for deeper nested items
     }
-  });
+
+    const extractText = (token: any): string => {
+      if (typeof token === 'string') return token;
+      
+      if (token.text) return token.text;
+      
+      if (token.tokens) {
+        return token.tokens.map(extractText).join(' ');
+      }
+      
+      if (token.items) {
+        return token.items.map(extractText).join('\n');
+      }
+      
+      if (token.type === 'table') {
+        let tableText = '';
+        if (token.header) {
+          tableText += token.header.map((cell: any) => cell.text).join(' | ') + '\n';
+        }
+        if (token.rows) {
+          tableText += token.rows.map((row: any) => row.map((cell: any) => cell.text).join(' | ')).join('\n');
+        }
+        return tableText;
+      }
+      
+      return '';
+    };
+    
+    plainText = tokens.map(extractText).join('\n\n');
+    plainText = plainText
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(tocRegex, tableOfContents);
+
+    return convertASCIICharsToText(plainText);
+  } catch (error) {
+    logger.error(`Error converting markdown to plain text: ${error}`);
+    const renderer = new PlainTextRenderer();
+    marked.setOptions(markedOptions);
+    const plainText = marked(markdownText, { renderer }).toString();
+    return convertASCIICharsToText(plainText);
+  }
 }
 
-function __convertASCIINamesToText(str: string): string {
-  // Convert common HTML entities to their character equivalents
+function convertASCIICharsToText(str: string): string {
+  logger.debug('Converting ASCII characters to text', { inputLength: str.length });
+  
+  let result = str;
+  
   const htmlEntities: Record<string, string> = {
     "&quot;": '"',
     "&amp;": "&",
@@ -151,26 +215,43 @@ function __convertASCIINamesToText(str: string): string {
     "&ldquo;": '"',
     "&rdquo;": '"',
     "&bull;": "•",
-    "&hellip;": "…"
+    "&hellip;": "…",
+    "&copy;": "©",
+    "&reg;": "®",
+    "&trade;": "™",
+    "&euro;": "€",
+    "&pound;": "£",
+    "&yen;": "¥",
+    "&cent;": "¢",
+    "&sect;": "§",
+    "&para;": "¶",
+    "&deg;": "°",
+    "&plusmn;": "±",
+    "&times;": "×",
+    "&divide;": "÷",
+    "&frac14;": "¼",
+    "&frac12;": "½",
+    "&frac34;": "¾",
+    "&ne;": "≠",
+    "&le;": "≤",
+    "&ge;": "≥",
+    "&micro;": "µ",
+    "&middot;": "·"
   };
   
-  let result = str;
   for (const [entity, char] of Object.entries(htmlEntities)) {
     result = result.replaceAll(entity, char);
   }
-  return result;
-}
-
-function __convertASCIINumbersToText(str: string): string {
-  // Convert HTML Numbers (eg. "&#36;" => $)
-  return str.replace(/&#(\d+);/g, (match, code) => 
+  
+  result = result.replace(/&#(\d+);/g, (match, code) => 
     String.fromCharCode(Number(code))
   );
-}
-
-function convertASCIICharsToText(str: string): string {
-  logger.debug('Converting ASCII characters to text', { inputLength: str.length });
-  return __convertASCIINumbersToText(__convertASCIINamesToText(str));
+  
+  result = result.replace(/&#[xX]([A-Fa-f0-9]+);/g, (match, code) => 
+    String.fromCharCode(parseInt(code, 16))
+  );
+  
+  return result;
 }
 
 export { convertMarkdownToPlainText, convertASCIICharsToText };

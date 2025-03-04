@@ -20,4 +20,4 @@ log
 *.xlsx
 .aider*
 service-account.json
-input.md
+*.md
