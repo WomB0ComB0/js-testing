@@ -36,6 +36,7 @@
     "jszip": "^3.10.1",
     "libsodium-wrappers": "^0.7.15",
     "luxon": "^3.5.0",
+    "marked": "^15.0.7",
     "node-xlsx": "^0.24.0",
     "ora": "^8.2.0",
     "puppeteer": "^24.2.1",
