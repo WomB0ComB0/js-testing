@@ -19,3 +19,5 @@ log
 *.ics
 *.xlsx
 .aider*
+service-account.json
+input.md

@@ -1,6 +1,12 @@
 import { marked } from 'marked';
 import { $ } from 'bun';
-import { Logger } from './logger';
+import { Logger, LogLevel } from './logger';
+
+// Create a logger instance for this module
+const logger = Logger.getLogger('MarkdownToText', {
+  minLevel: LogLevel.INFO,
+  includeTimestamp: true
+});
 
 interface PlainTextRendererOptions {
   spaces?: boolean;
@@ -20,6 +26,7 @@ class PlainTextRenderer {
   constructor(options?: PlainTextRendererOptions) {
     this.options = options || {};
     this.whitespaceDelimiter = this.options.spaces ? ' ' : '\n';
+    logger.debug('PlainTextRenderer initialized', { options: this.options });
   }
 
   code(code: string, lang?: string, escaped?: boolean): string {
@@ -109,11 +116,23 @@ const defaultOptions: MarkedOptions = {
   headerIds: false
 };
 
-function convertMarkdownToPlainText(markdownText: string, markedOptions: MarkedOptions = defaultOptions): string {
-  const renderer = new PlainTextRenderer();
-  marked.setOptions(markedOptions);
-  const plainText = marked(markdownText, { renderer });
-  return convertASCIICharsToText(plainText);
+function convertMarkdownToPlainText(markdownText: string, markedOptions: MarkedOptions = defaultOptions): Promise<string> {
+  return logger.time('Convert markdown to plain text', async () => {
+    try {
+      const renderer = new PlainTextRenderer();
+      marked.setOptions(markedOptions);
+      // @ts-ignore - The type definitions for marked don't match our custom renderer
+      const plainText = marked(markdownText, { renderer });
+      logger.debug('Markdown converted successfully', { 
+        inputLength: markdownText.length,
+        outputLength: plainText.length 
+      });
+      return convertASCIICharsToText(plainText);
+    } catch (error) {
+      logger.error('Failed to convert markdown to plain text', error);
+      throw error;
+    }
+  });
 }
 
 function __convertASCIINamesToText(str: string): string {
@@ -150,17 +169,8 @@ function __convertASCIINumbersToText(str: string): string {
 }
 
 function convertASCIICharsToText(str: string): string {
+  logger.debug('Converting ASCII characters to text', { inputLength: str.length });
   return __convertASCIINumbersToText(__convertASCIINamesToText(str));
 }
 
-function selfExecute<T extends { new(...args: any[]): {} }>(constructor: T) {
-  new constructor();
-  return constructor;
-}
-
-@selfExecute
-class Main {
-  constructor() {
-    
-  }
-}
+export { convertMarkdownToPlainText, convertASCIICharsToText };
