@@ -1,3 +1,40 @@
+/**
+ * # Markdown to Google Docs Converter
+ * 
+ * This module provides functionality to convert Markdown content to Google Docs
+ * with proper formatting. It handles various Markdown elements like headings,
+ * lists, bold, italic, links, and code blocks.
+ * 
+ * ## Features
+ * - Create Google Docs from Markdown content
+ * - Apply proper formatting (headings, bold, italic, links, code blocks)
+ * - Share documents with specified recipients
+ * - Batch processing of formatting requests
+ * - Cleanup of Markdown syntax after formatting
+ * 
+ * ## Usage
+ * ```typescript
+ * // Create a new manager instance
+ * const manager = new GoogleDocsManager('./path-to-credentials.json');
+ * 
+ * // Create and share a document
+ * const documentUrl = await manager.createAndShareDocument({
+ *   title: 'My Document',
+ *   recipientEmail: 'recipient@example.com',
+ *   markdownContent: '# Hello World\n\nThis is **bold** and *italic*.'
+ * });
+ * 
+ * console.log(`Document created: ${documentUrl}`);
+ * ```
+ * 
+ * ## Command Line Usage
+ * ```
+ * bun run markdown-to-google-docs.ts <input.md> <document-title> <recipient-email> [credentials-path]
+ * ```
+ * 
+ * @module markdown-to-google-docs
+ */
+
 import { Logger, LogLevel } from './logger';
 import { convertMarkdownToPlainText } from './markdown-to-text';
 import { google } from 'googleapis';
@@ -6,42 +43,81 @@ import { marked } from 'marked';
 import type { Token, Tokens } from 'marked';
 import * as stringSimilarity from 'string-similarity';
 
+/**
+ * Decorator that automatically instantiates a class when the module is loaded
+ * @param constructor - The class constructor to instantiate
+ * @returns The original constructor
+ */
 function selfExecute<T extends { new(...args: any[]): {} }>(constructor: T) {
   new constructor();
   return constructor;
 }
 
+/**
+ * Options for creating a Google Doc from Markdown
+ * @interface GoogleDocOptions
+ */
 interface GoogleDocOptions {
+  /** The title of the Google Doc */
   title: string;
+  /** Email address to share the document with */
   recipientEmail: string;
+  /** Markdown content to convert */
   markdownContent: string;
+  /** Path to Google service account credentials (optional) */
   credentialsPath?: string;
 }
 
+/**
+ * Represents a paragraph position in a Google Doc
+ * @interface ParagraphPosition
+ */
 type ParagraphPosition = { 
+  /** Start index of the paragraph */
   startIndex: number, 
+  /** End index of the paragraph */
   endIndex: number, 
+  /** Text content of the paragraph */
   content: string 
 };
 
+/**
+ * Context for the Markdown renderer
+ * @interface RendererContext
+ */
 interface RendererContext {
+  /** Function to find text positions in the document */
   findTextPositions: (contentWithPositions: {text: string, startIndex: number, endIndex: number}[], text: string) => {startIndex: number, endIndex: number}[];
+  /** Array of content elements with their positions */
   contentWithPositions: {text: string, startIndex: number, endIndex: number}[];
+  /** Array of Google Docs API requests */
   requests: any[];
+  /** Array of paragraphs in the document */
   paragraphs: ParagraphPosition[];
+  /** Function to find a paragraph by its text content */
   findParagraphByText: (paragraphs: ParagraphPosition[], text: string) => ParagraphPosition | null;
 }
 
+// Initialize logger
 const logger = Logger.getLogger('GoogleDocsManager', {
   minLevel: LogLevel.INFO,
   includeTimestamp: true
 });
 
+/**
+ * Main class for managing Google Docs operations
+ * 
+ * Handles creation, sharing, and formatting of Google Docs from Markdown content.
+ */
 class GoogleDocsManager {
   private auth: GoogleAuth;
   private docsService: any;
   private driveService: any;
 
+  /**
+   * Creates a new GoogleDocsManager instance
+   * @param credentialsPath - Path to the Google service account credentials JSON file
+   */
   constructor(credentialsPath: string = './service-account.json') {
     this.auth = new GoogleAuth({
       keyFile: credentialsPath,
@@ -56,6 +132,11 @@ class GoogleDocsManager {
     logger.debug('GoogleDocsManager initialized', { credentialsPath });
   }
 
+  /**
+   * Creates a new Google Doc with the specified title
+   * @param title - The title of the document
+   * @returns Promise resolving to the document ID
+   */
   async createDocument(title: string): Promise<string> {
     try {
       const response = await logger.time('Create Google Doc', async () => {
@@ -74,6 +155,11 @@ class GoogleDocsManager {
     }
   }
 
+  /**
+   * Shares a Google Doc with the specified email address
+   * @param documentId - The ID of the document to share
+   * @param email - The email address to share with
+   */
   async shareDocument(documentId: string, email: string): Promise<void> {
     try {
       await logger.time('Share Google Doc', async () => {
@@ -94,6 +180,11 @@ class GoogleDocsManager {
     }
   }
 
+  /**
+   * Updates a Google Doc with plain text content
+   * @param documentId - The ID of the document to update
+   * @param content - The text content to insert
+   */
   async updateDocumentContent(documentId: string, content: string): Promise<void> {
     try {
       await logger.time('Update document content', async () => {
@@ -124,6 +215,11 @@ class GoogleDocsManager {
     }
   }
 
+  /**
+   * Converts Markdown content to a formatted Google Doc
+   * @param documentId - The ID of the document to format
+   * @param markdownContent - The Markdown content to convert
+   */
   async convertMarkdownToFormattedDoc(documentId: string, markdownContent: string): Promise<void> {
     try {
       logger.debug('Starting markdown conversion', { documentId });
@@ -175,6 +271,12 @@ class GoogleDocsManager {
     }
   }
 
+  /**
+   * Recursively processes Markdown tokens to apply formatting
+   * @param tokens - Array of Markdown tokens
+   * @param context - Renderer context
+   * @private
+   */
   private processTokensRecursively(tokens: Token[], context: RendererContext): void {
     for (const token of tokens) {
       switch (token.type) {
@@ -207,6 +309,12 @@ class GoogleDocsManager {
     }
   }
 
+  /**
+   * Applies bold formatting to text
+   * @param token - Strong token from Markdown
+   * @param context - Renderer context
+   * @private
+   */
   private applyStrongFormatting(token: Tokens.Strong, context: RendererContext): void {
     const cleanText = token.text.replace(/<[^>]*>/g, '');
     const positions = context.findTextPositions(context.contentWithPositions, cleanText);
@@ -226,6 +334,12 @@ class GoogleDocsManager {
     }
   }
 
+  /**
+   * Applies italic formatting to text
+   * @param token - Em token from Markdown
+   * @param context - Renderer context
+   * @private
+   */
   private applyEmFormatting(token: Tokens.Em, context: RendererContext): void {
     const positions = context.findTextPositions(context.contentWithPositions, token.text);
     for (const position of positions) {
@@ -244,6 +358,12 @@ class GoogleDocsManager {
     }
   }
 
+  /**
+   * Applies link formatting to text
+   * @param token - Link token from Markdown
+   * @param context - Renderer context
+   * @private
+   */
   private applyLinkFormatting(token: Tokens.Link, context: RendererContext): void {
     const positions = context.findTextPositions(context.contentWithPositions, token.text);
     for (const position of positions) {
@@ -264,6 +384,12 @@ class GoogleDocsManager {
     }
   }
 
+  /**
+   * Applies code formatting to inline code
+   * @param token - Codespan token from Markdown
+   * @param context - Renderer context
+   * @private
+   */
   private applyCodespanFormatting(token: Tokens.Codespan, context: RendererContext): void {
     const positions = context.findTextPositions(context.contentWithPositions, token.text);
     for (const position of positions) {
@@ -284,6 +410,13 @@ class GoogleDocsManager {
     }
   }
 
+  /**
+   * Creates formatting requests for Markdown content
+   * @param markdownContent - The Markdown content to format
+   * @param document - The Google Doc document object
+   * @returns Array of Google Docs API requests
+   * @private
+   */
   private async createFormattingRequestsFromMarkdown(markdownContent: string, document: any): Promise<any[]> {
     const requests: any[] = [];
     
@@ -548,6 +681,12 @@ class GoogleDocsManager {
     return requests;
   }
 
+  /**
+   * Extracts content with positions from a Google Doc
+   * @param document - The Google Doc document object
+   * @returns Array of content elements with their positions
+   * @public
+   */
   public getContentWithPositions(document: any): {text: string, startIndex: number, endIndex: number}[] {
     const result: {text: string, startIndex: number, endIndex: number}[] = [];
     
@@ -570,6 +709,13 @@ class GoogleDocsManager {
     return result;
   }
 
+  /**
+   * Finds positions of text in a document
+   * @param contentWithPositions - Array of content elements with their positions
+   * @param searchText - Text to search for
+   * @returns Array of positions where the text was found
+   * @public
+   */
   public findTextPositions(contentWithPositions: {text: string, startIndex: number, endIndex: number}[], searchText: string): {startIndex: number, endIndex: number}[] {
     const results: {startIndex: number, endIndex: number}[] = [];
     
@@ -587,6 +733,14 @@ class GoogleDocsManager {
     return results;
   }
 
+  /**
+   * Finds a paragraph by its text content using string similarity
+   * @param paragraphs - Array of paragraphs to search
+   * @param text - Text to search for
+   * @param similarityThreshold - Minimum similarity threshold (0-1)
+   * @returns The matching paragraph or null if not found
+   * @public
+   */
   public findParagraphByText(
     paragraphs: ParagraphPosition[],
     text: string,
@@ -607,6 +761,12 @@ class GoogleDocsManager {
     return null;
   }
 
+  /**
+   * Creates requests to clean up Markdown syntax from the document
+   * @param document - The Google Doc document object
+   * @returns Array of Google Docs API requests
+   * @private
+   */
   private createMarkdownSyntaxCleanupRequests(document: any): any[] {
     const requests: any[] = [];
     const contentWithPositions = this.getContentWithPositions(document);
@@ -645,6 +805,12 @@ class GoogleDocsManager {
     return requests;
   }
 
+  /**
+   * Creates a Google Doc from Markdown content and shares it
+   * @param options - Options for creating and sharing the document
+   * @returns Promise resolving to the document URL
+   * @public
+   */
   async createAndShareDocument(options: GoogleDocOptions): Promise<string> {
     try {
       logger.info('Starting document creation process', { 
@@ -672,6 +838,10 @@ class GoogleDocsManager {
   }
 }
 
+/**
+ * Main class for command-line execution
+ * Automatically runs when the module is executed directly
+ */
 @selfExecute
 class Main {
   constructor() {
@@ -680,6 +850,9 @@ class Main {
     }
   }
 
+  /**
+   * Main entry point for command-line execution
+   */
   async main() {
     const args = process.argv.slice(2);
   
