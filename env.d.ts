@@ -21,6 +21,7 @@ declare global {
       GITHUB_TOKEN_D: string;
       REPO_OWNER: string;
       REPO_NAME: string;
+      GEMINI_API_KEY: string;
     }
   }
 }
