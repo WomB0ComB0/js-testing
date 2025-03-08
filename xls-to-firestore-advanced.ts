@@ -3,6 +3,7 @@ import admin from 'firebase-admin';
 import { GeoFirestore } from 'geofirestore';
 import { Client } from '@googlemaps/google-maps-services-js';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -15,6 +16,7 @@ interface ServiceAccount {
 }
 
 interface CleanedData {
+  // id: string;
   source_service: string;
   contact: string | null;
   agency_provider: string;
@@ -48,12 +50,13 @@ interface CleanedData {
     );
     const rows = data.slice(1) as (string | undefined)[][];
 
-    const collectionRef = geoFirestore.collection('resources');
+    const collectionRef = geoFirestore.collection('search');
 
     for (const row of rows) {
       const paddedRow = row.length >= 8 ? row : [...row, ...Array(Math.max(0, 8 - row.length)).fill(undefined)];
 
       const docData: CleanedData = {
+        // id: crypto.randomUUID(),
         source_service: paddedRow[0]?.toString().trim() ?? 'Unknown Service',
         contact: paddedRow[1]?.toString().trim() ?? null,
         agency_provider: paddedRow[2]?.toString().trim() ?? 'Unknown Provider',
