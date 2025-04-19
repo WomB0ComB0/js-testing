@@ -115,13 +115,14 @@ if (require.main === module) {
         
         Object.entries(information).forEach(([, {company, title, link}]) => {
           
-          const c = cleaner(argCompany)
+          const companies = argCompany.split('|').map(comp => cleaner(comp.trim()));
+          
           if (matchCase) {
-            if (company === c && title.match(new RegExp(matchCase, 'i'))) {
+            if (companies.includes(company) && title.match(new RegExp(matchCase, 'i'))) {
               output.push(link)
             }
           } else {
-            if (company === c) {
+            if (companies.includes(company)) {
               output.push(link)
             }
           }
@@ -145,3 +146,4 @@ if (require.main === module) {
     console.log('[Outer Try]: Done')
   }
 }
+// bun linkedin-title-cleaner.ts "google|facebook|meta|airbnb|amazon|microsoft|apple|goldman|intuit|verizon|citadel|visa|fidelity|halliburton" "university|campus|undergrad|intern"
