@@ -12,6 +12,7 @@ import FireCrawlApp, { MapParams } from '@mendable/firecrawl-js';
 import { Command } from 'commander';
 import * as dotenv from 'dotenv';
 import fs from 'node:fs';
+import fsPromises from 'fs/promises';
 import path from 'node:path';
 import ora from 'ora';
 import chalk from 'chalk';
