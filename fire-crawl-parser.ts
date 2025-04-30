@@ -1,7 +1,6 @@
-import { $, file, readableStreamToJSON, argv, write } from 'bun';
+import { file, readableStreamToJSON, argv, write } from 'bun';
 import { z } from 'zod';
 
-// Schema definition for crawl data validation
 const fireSchema = z.object({
   markdown: z.string(),
   metadata: z.object({
@@ -91,16 +90,13 @@ function filterData(data: FireCrawl[], filterPattern: string, limit: number): Fi
   });
   
   if (filterPattern) {
-    // Split pattern by | to support multiple filter terms
     const patterns = filterPattern.split('|');
     filtered = data.filter(item => 
       patterns.some(pattern => item.metadata.url.includes(pattern))
     );
   }
   
-  if (limit > 0) {
-    filtered = filtered.slice(0, limit);
-  }
+  if (limit > 0) filtered = filtered.slice(0, limit);
   
   return filtered;
 }
@@ -112,12 +108,10 @@ function filterData(data: FireCrawl[], filterPattern: string, limit: number): Fi
 function outputResults(data: FireCrawl[]): void {
   console.log(`Found ${data.length} matching results.`);
   
-  // Write to output file
   const outputPath = `crawl-results-${Date.now()}.json`;
   write(outputPath, JSON.stringify(data, null, 2));
   console.log(`Results written to ${outputPath}`);
   
-  // Display summary of results
   data.forEach((item, index) => {
     console.log(`\nResult ${index + 1}:`);
     console.log(`  Title: ${item.metadata.title}`);
