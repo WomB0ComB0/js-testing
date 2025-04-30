@@ -105,7 +105,7 @@ function filterData(data: FireCrawl[], filterPattern: string, limit: number): Fi
  * Outputs the results
  * @param data Filtered data to output
  */
-function outputResults(data: FireCrawl[]): void {
+function outputResults(data: FireCrawl[] | string[]): void {
   console.log(`Found ${data.length} matching results.`);
   
   const outputPath = `crawl-results-${Date.now()}.json`;
@@ -114,9 +114,13 @@ function outputResults(data: FireCrawl[]): void {
   
   data.forEach((item, index) => {
     console.log(`\nResult ${index + 1}:`);
-    console.log(`  Title: ${item.metadata.title}`);
-    console.log(`  URL: ${item.metadata.url}`);
-    console.log(`  Status Code: ${item.metadata.statusCode}`);
+    if (typeof item === 'string') {
+      console.log(`  URL: ${item}`);
+    } else {
+      console.log(`  Title: ${item.metadata.title}`);
+      console.log(`  URL: ${item.metadata.url}`);
+      console.log(`  Status Code: ${item.metadata.statusCode}`);
+    }
   });
 }
 
@@ -134,7 +138,7 @@ async function main(): Promise<void> {
     const data = await readAndParseFile(filepath);
     console.log(`Successfully parsed ${data.length} entries.`);
     
-    const filteredData = filterData(data, filterPattern, limit);
+    const filteredData = filterData(data, filterPattern, limit).map(item => item.metadata.url);
     outputResults(filteredData);
     
     process.exit(0);
