@@ -25,3 +25,5 @@ service-account.json
 *.txt
 .git
 resume.md
+fire.json
+crawl-results-*.json
