@@ -11,7 +11,7 @@ function selfExecute<T extends { new(...args: any[]): {} }>(constructor: T): T {
   return constructor;
 }
 
-/**
+/**  
  * Main application class for generating project descriptions using Gemini API
  * Automatically instantiates itself when the module is loaded
  */

@@ -15,7 +15,7 @@ class Main {
     'open_collective: mike-odnis', 
     'ko_fi: Y8Y77AJEA',
     'buy_me_a_coffee: mikeodnis'
-  ];
+  ] as const;
 
   constructor() {
     if (!env.GITHUB_TOKEN) {
