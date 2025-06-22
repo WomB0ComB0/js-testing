@@ -7,8 +7,8 @@ import * as path from 'node:path';
 const stringFilter = (
   strings: string | string[],
   regex: RegExp
-): string | string[] => { 
-  if (Array.isArray(strings)) { 
+): string | string[] => {
+  if (Array.isArray(strings)) {
     return strings.filter((string) => string.match(regex));
   }
   return strings.match(regex) ? strings : '';
@@ -18,24 +18,17 @@ const stringFilter = (
  * Convert a string to kebab-case
  */
 const toKebab = (input: string): string => {
-  // Handle file names with extensions separately
   const parts = input.split('.');
-
   if (parts.length > 1) {
-    // For files with extensions
     const extension = parts.pop();
     const fileName = parts.join('.');
-
-    // Convert to kebab case - replace capital letters with '-' + lowercase
     const kebabName = fileName
-      .replace(/([A-Z])/g, '-$1')  // Add dash before capitals
-      .replace(/\s+/g, '-')        // Replace spaces with dashes
-      .replace(/^-/, '')           // Remove dash at start if present
-      .toLowerCase();              // Convert everything to lowercase
-
+      .replace(/([A-Z])/g, '-$1')
+      .replace(/\s+/g, '-')
+      .replace(/^-/, '')
+      .toLowerCase();
     return `${kebabName}.${extension}`;
   } else {
-    // For directories or files without extensions
     return input
       .replace(/([A-Z])/g, '-$1')
       .replace(/\s+/g, '-')
@@ -45,12 +38,95 @@ const toKebab = (input: string): string => {
 };
 
 /**
- * Process all files in a directory to convert them to kebab-case
+ * Convert a string to camelCase
  */
-const convertToKebabCase = (
-  directoryPath: string, 
+const toCamel = (input: string): string => {
+  const parts = input.split('.');
+  if (parts.length > 1) {
+    const extension = parts.pop();
+    const fileName = parts.join('.');
+    const camelName = fileName
+      .replace(/[^a-zA-Z0-9]+(.)?/g, (match, chr) => (chr ? chr.toUpperCase() : ''))
+      .replace(/^./, (match) => match.toLowerCase());
+    return `${camelName}.${extension}`;
+  } else {
+    return input
+      .replace(/[^a-zA-Z0-9]+(.)?/g, (match, chr) => (chr ? chr.toUpperCase() : ''))
+      .replace(/^./, (match) => match.toLowerCase());
+  }
+};
+
+/**
+ * Convert a string to PascalCase
+ */
+const toPascal = (input: string): string => {
+  const parts = input.split('.');
+  if (parts.length > 1) {
+    const extension = parts.pop();
+    const fileName = parts.join('.');
+    const pascalName = fileName
+      .replace(/[^a-zA-Z0-9]+(.)?/g, (match, chr) => (chr ? chr.toUpperCase() : ''))
+      .replace(/^./, (match) => match.toUpperCase());
+    return `${pascalName}.${extension}`;
+  } else {
+    return input
+      .replace(/[^a-zA-Z0-9]+(.)?/g, (match, chr) => (chr ? chr.toUpperCase() : ''))
+      .replace(/^./, (match) => match.toUpperCase());
+  }
+};
+
+/**
+ * Convert a string to snake_case
+ */
+const toSnake = (input: string): string => {
+  const parts = input.split('.');
+  if (parts.length > 1) {
+    const extension = parts.pop();
+    const fileName = parts.join('.');
+    const snakeName = fileName
+      .replace(/([A-Z])/g, '_$1')
+      .replace(/\s+/g, '_')
+      .replace(/^-/, '')
+      .toLowerCase();
+    return `${snakeName}.${extension}`;
+  } else {
+    return input
+      .replace(/([A-Z])/g, '_$1')
+      .replace(/\s+/g, '_')
+      .replace(/^-/, '')
+      .toLowerCase();
+  }
+};
+
+/**
+ * Type definition for case conversion functions.
+ */
+type CaseConverter = (input: string) => string;
+
+/**
+ * Map of supported case names to their respective converter functions.
+ */
+const caseConverters: { [key: string]: CaseConverter } = {
+  kebab: toKebab,
+  camel: toCamel,
+  pascal: toPascal,
+  snake: toSnake,
+};
+
+/**
+ * Process all files in a directory to convert them to the specified case
+ */
+const convertCase = (
+  directoryPath: string,
+  targetCase: string,
   fileExtensions: string[] = []
 ): void => {
+  const converter = caseConverters[targetCase];
+  if (!converter) {
+    console.error(`Error: Unsupported case type "${targetCase}". Supported cases are: ${Object.keys(caseConverters).join(', ')}`);
+    return;
+  }
+
   const items = fs.readdirSync(directoryPath);
 
   for (const item of items) {
@@ -58,25 +134,25 @@ const convertToKebabCase = (
     const stats = fs.statSync(itemPath);
 
     if (stats.isDirectory()) {
-      // Rename directory to kebab-case
-      const kebabName = toKebab(item);
-      if (kebabName !== item) {
-        const newPath = path.join(directoryPath, kebabName);
+      // Rename directory to target case
+      const newName = converter(item);
+      if (newName !== item) {
+        const newPath = path.join(directoryPath, newName);
         fs.renameSync(itemPath, newPath);
         // Continue processing in the renamed directory
-        convertToKebabCase(newPath, fileExtensions);
+        convertCase(newPath, targetCase, fileExtensions);
       } else {
         // Continue processing in the directory
-        convertToKebabCase(itemPath, fileExtensions);
+        convertCase(itemPath, targetCase, fileExtensions);
       }
     } else if (stats.isFile()) {
       // Check if the file has one of the specified extensions
       const extension = path.extname(item).toLowerCase().substring(1);
       if (fileExtensions.length === 0 || fileExtensions.includes(extension)) {
-        // Rename file to kebab-case
-        const kebabName = toKebab(item);
-        if (kebabName !== item) {
-          const newPath = path.join(directoryPath, kebabName);
+        // Rename file to target case
+        const newName = converter(item);
+        if (newName !== item) {
+          const newPath = path.join(directoryPath, newName);
           fs.renameSync(itemPath, newPath);
         }
       }
@@ -85,28 +161,28 @@ const convertToKebabCase = (
 };
 
 (() => {
-  try { 
-    const curr = process.cwd();
+  try {
+    const [inputDir, targetCase, ...extensions] = process.argv.slice(2);
 
-    // Get input directory from command line, or use current directory
-    const inputDir = process.argv[2] || curr;
+    if (!inputDir || !targetCase) {
+      console.log('Usage: node your-script.js <directoryPath> <targetCase> [fileExtensions...]');
+      console.log('Supported cases: kebab, camel, pascal, snake');
+      process.exit(1);
+    }
 
-    // Get optional file extensions to include
-    const extensions = process.argv.slice(3);
-
-    console.log(`Converting files in ${inputDir} to kebab-case`);
+    console.log(`Converting files in ${inputDir} to ${targetCase}-case`);
     if (extensions.length > 0) {
       console.log(`Only processing files with extensions: ${extensions.join(', ')}`);
     } else {
       console.log('Processing all files');
     }
 
-    convertToKebabCase(inputDir, extensions);
+    convertCase(inputDir, targetCase, extensions);
 
     console.log('Conversion complete!');
   } catch (error) {
     console.error('Error during conversion:', error);
   } finally {
     console.log('Process finished');
-  } 
+  }
 })();
