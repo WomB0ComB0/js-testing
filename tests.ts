@@ -16,46 +16,166 @@
 
 "use strict";
 
+type TimerHandle = NodeJS.Timeout | NodeJS.Immediate;
+
+interface TimerEntry {
+  id: TimerHandle;
+  type: 'timeout' | 'interval' | 'immediate';
+  created: number;
+  callback: () => void;
+}
+
 class TimerManager {
-  private timers: (NodeJS.Timer)[] = [];
+  private timers = new Map<TimerHandle, TimerEntry>();
+  private disposed = false;
 
-  timeout(ms: number, callback: () => void): NodeJS.Timer {
-    const t = setTimeout(callback, ms);
-    this.timers.push(t);
-    return t;
+  /**
+   * Creates a timeout that will be automatically tracked and cleaned up
+   */
+  timeout(ms: number, callback: () => void): NodeJS.Timeout {
+    this.checkDisposed();
+    const id = setTimeout(() => {
+      this.timers.delete(id);
+      callback();
+    }, ms);
+    
+    this.timers.set(id, {
+      id,
+      type: 'timeout',
+      created: Date.now(),
+      callback
+    });
+    
+    return id;
   }
 
-  interval(ms: number, callback: () => void): NodeJS.Timer {
-    const i = setInterval(callback, ms);
-    this.timers.push(i);
-    return i;
+  /**
+   * Creates an interval that will be automatically tracked and cleaned up
+   */
+  interval(ms: number, callback: () => void): NodeJS.Timeout {
+    this.checkDisposed();
+    const id = setInterval(callback, ms);
+    
+    this.timers.set(id, {
+      id,
+      type: 'interval',
+      created: Date.now(),
+      callback
+    });
+    
+    return id;
   }
 
-  immediate(callback: () => void): NodeJS.Timer {
-    const r = setImmediate(callback);
-    this.timers.push(r);
-    return r;
+  /**
+   * Creates an immediate that will be automatically tracked and cleaned up
+   */
+  immediate(callback: () => void): NodeJS.Immediate {
+    this.checkDisposed();
+    const id = setImmediate(() => {
+      this.timers.delete(id);
+      callback();
+    });
+    
+    this.timers.set(id, {
+      id,
+      type: 'immediate',
+      created: Date.now(),
+      callback
+    });
+    
+    return id;
   }
 
-  clear(...timers: (NodeJS.Timer)[]): void {
+  /**
+   * Clears specific timers and removes them from tracking
+   */
+  clear(...timers: TimerHandle[]): void {
     timers.forEach(timer => {
-      if (typeof timer === 'object' && timer !== null) {
-        if ('hasRef' in timer) {
-          clearTimeout(timer as NodeJS.Timeout);
-        } else if ('_idleNext' in timer) {
-          clearImmediate(timer as NodeJS.Immediate);
+      if (this.timers.has(timer)) {
+        const entry = this.timers.get(timer)!;
+        switch (entry.type) {
+          case 'timeout':
+          case 'interval':
+            clearTimeout(timer as NodeJS.Timeout);
+            break;
+          case 'immediate':
+            clearImmediate(timer as NodeJS.Immediate);
+            break;
         }
+        this.timers.delete(timer);
       }
     });
   }
 
+  /**
+   * Clears all tracked timers
+   */
   clearAll(): void {
-    this.clear(...this.timers);
-    this.timers = [];
+    const timers = Array.from(this.timers.keys());
+    this.clear(...timers);
   }
 
-  withTimers<T>(fn: (tm: TimerManager) => Promise<T>): Promise<T> {
-    return fn(this).finally(() => this.clearAll());
+  /**
+   * Clears only timers of a specific type
+   */
+  clearByType(type: 'timeout' | 'interval' | 'immediate'): void {
+    const timers = Array.from(this.timers.entries())
+      .filter(([, entry]) => entry.type === type)
+      .map(([id]) => id);
+    this.clear(...timers);
+  }
+
+  /**
+   * Returns the number of active timers
+   */
+  get activeCount(): number {
+    return this.timers.size;
+  }
+
+  /**
+   * Returns information about all active timers
+   */
+  getActiveTimers(): Array<{ type: string; created: number; age: number }> {
+    const now = Date.now();
+    return Array.from(this.timers.values()).map(entry => ({
+      type: entry.type,
+      created: entry.created,
+      age: now - entry.created
+    }));
+  }
+
+  /**
+   * Executes a function with automatic cleanup of all timers created during execution
+   */
+  async withTimers<T>(fn: (tm: TimerManager) => Promise<T>): Promise<T> {
+    this.checkDisposed();
+    const initialTimers = new Set(this.timers.keys());
+    
+    try {
+      const result = await fn(this);
+      return result;
+    } finally {
+      // Clear only timers created during this execution
+      const newTimers = Array.from(this.timers.keys())
+        .filter(timer => !initialTimers.has(timer));
+      this.clear(...newTimers);
+    }
+  }
+
+  /**
+   * Disposes the timer manager and clears all timers
+   */
+  dispose(): void {
+    if (!this.disposed) {
+      this.clearAll();
+      this.disposed = true;
+    }
+  }
+
+  private checkDisposed(): void {
+    if (this.disposed) {
+      throw new Error('TimerManager has been disposed');
+    }
   }
 }
 
