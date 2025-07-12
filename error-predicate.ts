@@ -36,4 +36,9 @@ class CustomError extends Error {
   // Test 5: Passing an Error object with fn and extra opts
   const fnWithOpts = (err: Error, prefix: string) => `${prefix}: ${err.message}`;
   console.log("Test 5:", error<Error, string>(err1, fnWithOpts, "Oops"));
+
+  // Test 6: Passing _ to fn
+  console.log("Test: 6", error<Error, undefined>(new Error(),undefined, { 
+    // 
+  }))
 })();
