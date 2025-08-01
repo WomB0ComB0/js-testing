@@ -39,6 +39,7 @@ declare global {
       REPO_NAME: string;
       GEMINI_API_KEY: string;
       OPENAI_API_KEY: string;
+      MONGO_URI: string;
     }
   }
 }

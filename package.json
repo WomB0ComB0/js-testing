@@ -47,6 +47,7 @@
     "libsodium-wrappers": "^0.7.15",
     "luxon": "^3.6.1",
     "marked": "^15.0.12",
+    "mongodb": "^6.18.0",
     "mongoose": "^8.15.1",
     "node-xlsx": "^0.24.0",
     "ora": "^8.2.0",
