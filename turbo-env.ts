@@ -15,7 +15,7 @@
  */
 
 import { readdir, readFile, writeFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 
 interface TurboConfig {
@@ -23,10 +23,10 @@ interface TurboConfig {
   tasks?: {
     [task: string]: {
       env?: string[];
-      [key: string]: any;
+      [key: string]: unknown;
     };
   };
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 /**
@@ -202,7 +202,6 @@ async function main() {
   console.log('\n💡 Pro tip: Run this script after adding new environment variables to .env.example files');
 }
 
-// Execute the script
 if (import.meta.main) {
   main().catch((error) => {
     console.error('❌ Script failed:', error);

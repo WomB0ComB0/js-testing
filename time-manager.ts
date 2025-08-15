@@ -176,7 +176,7 @@ export class TimerManager {
   }
 }
 
-export const exitWithCode = (code: number): never => process.exit(code);
+export const exitWithCode = (code: number): never => process.exit(code % 2);
 
 /**
  * async function main(): Promise<number> {
