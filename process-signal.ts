@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#!/usr/bin/env node
+//!/usr/bin/env node
 
-import { spawn, ChildProcess } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
+import { spawn, ChildProcess } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 interface SignalInfo {
   name: string;
