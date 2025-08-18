@@ -1,199 +1,371 @@
-import * as dotenv from 'dotenv';
+const NewsAPI = require('newsapi');
+import { config } from 'dotenv';
 
 // Load environment variables
-dotenv.config();
+config();
 
-// Types based on GNews API documentation
+// Types for News API responses
 interface Article {
-  title: string;
-  description: string;
-  content: string;
-  url: string;
-  image: string;
-  publishedAt: string;
   source: {
+    id: string | null;
     name: string;
-    url: string;
   };
+  author: string | null;
+  title: string;
+  description: string | null;
+  url: string;
+  urlToImage: string | null;
+  publishedAt: string;
+  content: string | null;
 }
 
-interface GNewsResponse {
-  totalArticles: number;
+interface Source {
+  id: string;
+  name: string;
+  description: string;
+  url: string;
+  category: string;
+  language: string;
+  country: string;
+}
+
+interface TopHeadlinesResponse {
+  status: string;
+  totalResults: number;
   articles: Article[];
 }
 
-interface GNewsError {
-  errors: string[];
+interface EverythingResponse {
+  status: string;
+  totalResults: number;
+  articles: Article[];
 }
 
-class GNewsAPI {
-  private apiKey: string;
-  private baseUrl: string = 'https://gnews.io/api/v4';
-
-  constructor() {
-    const apiKey = process.env.GNEWS_API_KEY;
-    if (!apiKey) {
-      throw new Error('GNEWS_API_KEY environment variable is required');
-    }
-    this.apiKey = apiKey;
-  }
-
-  /**
-   * Search for articles
-   */
-  async search(params: {
-    q: string;
-    lang?: string;
-    country?: string;
-    max?: number;
-    in?: string;
-    nullable?: string;
-    from?: string;
-    to?: string;
-    sortby?: 'relevance' | 'publishedAt';
-  }): Promise<GNewsResponse> {
-    const searchParams = new URLSearchParams({
-      apikey: this.apiKey,
-      ...Object.fromEntries(
-        Object.entries(params).map(([key, value]) => [key, String(value)])
-      )
-    });
-
-    const url = `${this.baseUrl}/search?${searchParams}`;
-    
-    try {
-      const response = await fetch(url);
-      const data = await response.json() as GNewsResponse | GNewsError;
-
-      if (!response.ok) {
-        const errorData = data as GNewsError;
-        throw new Error(`API Error: ${errorData.errors?.join(', ') || 'Unknown error'}`);
-      }
-
-      return data as GNewsResponse;
-    } catch (error) {
-      console.error('Search request failed:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Get top headlines
-   */
-  async getTopHeadlines(params?: {
-    lang?: string;
-    country?: string;
-    max?: number;
-    nullable?: string;
-    category?: 'general' | 'world' | 'nation' | 'business' | 'technology' | 'entertainment' | 'sports' | 'science' | 'health';
-  }): Promise<GNewsResponse> {
-    const searchParams = new URLSearchParams({
-      apikey: this.apiKey,
-      ...Object.fromEntries(
-        Object.entries(params || {}).map(([key, value]) => [key, String(value)])
-      )
-    });
-
-    const url = `${this.baseUrl}/top-headlines?${searchParams}`;
-    
-    try {
-      const response = await fetch(url);
-      const data = await response.json() as GNewsResponse | GNewsError;
-
-      if (!response.ok) {
-        const errorData = data as GNewsError;
-        throw new Error(`API Error: ${errorData.errors?.join(', ') || 'Unknown error'}`);
-      }
-
-      return data as GNewsResponse;
-    } catch (error) {
-      console.error('Top headlines request failed:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Helper method to display articles in a formatted way
-   */
-  displayArticles(articles: Article[], maxArticles: number = 5): void {
-    console.log(`\n📰 Displaying ${Math.min(articles.length, maxArticles)} articles:\n`);
-    
-    articles.slice(0, maxArticles).forEach((article, index) => {
-      console.log(`${index + 1}. ${article.title}`);
-      console.log(`   Source: ${article.source.name}`);
-      console.log(`   Published: ${new Date(article.publishedAt).toLocaleDateString()}`);
-      console.log(`   URL: ${article.url}`);
-      if (article.description) {
-        console.log(`   Description: ${article.description.substring(0, 150)}...`);
-      }
-      console.log('   ' + '─'.repeat(80));
-    });
-  }
+interface SourcesResponse {
+  status: string;
+  sources: Source[];
 }
 
-// Test function
-async function testGNewsAPI() {
+type NewsAPIResponse = TopHeadlinesResponse | EverythingResponse | SourcesResponse;
+
+// Test configuration
+interface TestConfig {
+  delayBetweenRequests: number;
+  maxArticlesToShow: number;
+}
+
+const TEST_CONFIG: TestConfig = {
+  delayBetweenRequests: 1000, // 1 second delay to respect rate limits
+  maxArticlesToShow: 3 // Limit console output
+};
+
+// Initialize NewsAPI with your API key
+const NEWS_API_KEY = process.env.NEWS_API_KEY || 'your_api_key_here';
+const newsapi = new NewsAPI(NEWS_API_KEY);
+
+// Utility function to add delay between requests
+const delay = (ms: number): Promise<void> => 
+  new Promise(resolve => setTimeout(resolve, ms));
+
+// Utility function to display results
+const displayResults = (
+  testName: string, 
+  response: NewsAPIResponse, 
+  showArticles: boolean = true
+): void => {
+  console.log(`\n=== ${testName} ===`);
+  console.log(`Status: ${response.status}`);
+  
+  if ('sources' in response) {
+    console.log(`Total sources: ${response.sources.length}`);
+    console.log('Sample sources:', response.sources.slice(0, 3).map(s => s.name));
+  }
+  
+  if ('articles' in response) {
+    console.log(`Total articles: ${response.totalResults || response.articles.length}`);
+    
+    if (showArticles && response.articles.length > 0) {
+      console.log('\nSample articles:');
+      response.articles.slice(0, TEST_CONFIG.maxArticlesToShow).forEach((article, index) => {
+        console.log(`${index + 1}. ${article.title}`);
+        console.log(`   Source: ${article.source.name}`);
+        console.log(`   Published: ${article.publishedAt}`);
+        console.log(`   URL: ${article.url}\n`);
+      });
+    }
+  }
+};
+
+// Test function with error handling
+const runTest = async <T extends NewsAPIResponse>(
+  testName: string, 
+  testFunction: () => Promise<T>
+): Promise<T | null> => {
   try {
-    const gnews = new GNewsAPI();
-    
-    console.log('🔍 Testing GNews API...\n');
-
-    // Test 1: Search for specific topic
-    console.log('1️⃣ Testing search endpoint...');
-    const searchResults = await gnews.search({
-      q: 'artificial intelligence',
-      lang: 'en',
-      max: 5,
-      sortby: 'publishedAt'
-    });
-    
-    console.log(`Found ${searchResults.totalArticles} articles about AI`);
-    gnews.displayArticles(searchResults.articles, 3);
-
-    // Test 2: Get top headlines
-    console.log('\n2️⃣ Testing top headlines endpoint...');
-    const headlines = await gnews.getTopHeadlines({
-      category: 'technology',
-      lang: 'en',
-      max: 5
-    });
-    
-    console.log(`Found ${headlines.totalArticles} top technology headlines`);
-    gnews.displayArticles(headlines.articles, 3);
-
-    // Test 3: Search with date range (last 7 days)
-    console.log('\n3️⃣ Testing search with date range...');
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    
-    const recentNews = await gnews.search({
-      q: 'climate change',
-      lang: 'en',
-      from: sevenDaysAgo.toISOString().split('T')[0],
-      max: 3,
-      sortby: 'publishedAt'
-    });
-    
-    console.log(`Found ${recentNews.totalArticles} recent articles about climate change`);
-    gnews.displayArticles(recentNews.articles, 2);
-
-    console.log('\n✅ All tests completed successfully!');
-
+    console.log(`\n🧪 Running: ${testName}`);
+    const response = await testFunction();
+    displayResults(testName, response);
+    return response;
   } catch (error) {
-    console.error('❌ Test failed:', error);
+    const err = error as Error & { code?: string };
+    console.error(`\n❌ Error in ${testName}:`, err.message);
+    if (err.code) console.error(`Error code: ${err.code}`);
+    return null;
+  }
+};
+
+// Top Headlines test parameters
+interface TopHeadlinesParams {
+  sources?: string;
+  q?: string;
+  category?: 'business' | 'entertainment' | 'general' | 'health' | 'science' | 'sports' | 'technology';
+  language?: string;
+  country?: string;
+  pageSize?: number;
+}
+
+// Everything test parameters
+interface EverythingParams {
+  q?: string;
+  sources?: string;
+  domains?: string;
+  excludeDomains?: string;
+  from?: string;
+  to?: string;
+  language?: string;
+  sortBy?: 'relevancy' | 'popularity' | 'publishedAt';
+  pageSize?: number;
+  page?: number;
+}
+
+// Sources test parameters
+interface SourcesParams {
+  category?: 'business' | 'entertainment' | 'general' | 'health' | 'science' | 'sports' | 'technology';
+  language?: string;
+  country?: string;
+}
+
+// Main test suite
+export async function runAllTests(): Promise<void> {
+  console.log('🚀 Starting News API Tests');
+  console.log(`Using API Key: ${NEWS_API_KEY.substring(0, 8)}...`);
+
+  // Test 1: Top Headlines - General
+  await runTest('Top Headlines - General', async (): Promise<TopHeadlinesResponse> => {
+    const params: TopHeadlinesParams = {
+      language: 'en',
+      pageSize: 10
+    };
+    return await newsapi.v2.topHeadlines(params);
+  });
+
+  await delay(TEST_CONFIG.delayBetweenRequests);
+
+  // Test 2: Top Headlines - Specific Sources
+  await runTest('Top Headlines - BBC & The Verge', async (): Promise<TopHeadlinesResponse> => {
+    const params: TopHeadlinesParams = {
+      sources: 'bbc-news,the-verge',
+      pageSize: 10
+    };
+    return await newsapi.v2.topHeadlines(params);
+  });
+
+  await delay(TEST_CONFIG.delayBetweenRequests);
+
+  // Test 3: Top Headlines - Category
+  await runTest('Top Headlines - Technology Category', async (): Promise<TopHeadlinesResponse> => {
+    const params: TopHeadlinesParams = {
+      category: 'technology',
+      country: 'us',
+      pageSize: 10
+    };
+    return await newsapi.v2.topHeadlines(params);
+  });
+
+  await delay(TEST_CONFIG.delayBetweenRequests);
+
+  // Test 4: Top Headlines - Search Query
+  await runTest('Top Headlines - Bitcoin Query', async (): Promise<TopHeadlinesResponse> => {
+    const params: TopHeadlinesParams = {
+      q: 'bitcoin',
+      language: 'en',
+      pageSize: 10
+    };
+    return await newsapi.v2.topHeadlines(params);
+  });
+
+  await delay(TEST_CONFIG.delayBetweenRequests);
+
+  // Test 5: Everything - General Search
+  await runTest('Everything - AI Search', async (): Promise<EverythingResponse> => {
+    const params: EverythingParams = {
+      q: 'artificial intelligence',
+      language: 'en',
+      sortBy: 'popularity',
+      pageSize: 10
+    };
+    return await newsapi.v2.everything(params);
+  });
+
+  await delay(TEST_CONFIG.delayBetweenRequests);
+
+  // Test 6: Everything - Date Range
+  await runTest('Everything - Last Week Tech News', async (): Promise<EverythingResponse> => {
+    const lastWeek = new Date();
+    lastWeek.setDate(lastWeek.getDate() - 7);
     
-    if (error instanceof Error) {
-      if (error.message.includes('GNEWS_API_KEY')) {
-        console.log('\n💡 Make sure to set your GNEWS_API_KEY environment variable');
-        console.log('   You can create a .env file with: GNEWS_API_KEY=your_api_key_here');
-      }
-    }
+    const params: EverythingParams = {
+      q: 'technology',
+      from: lastWeek.toISOString().split('T')[0],
+      language: 'en',
+      sortBy: 'publishedAt',
+      pageSize: 10
+    };
+    return await newsapi.v2.everything(params);
+  });
+
+  await delay(TEST_CONFIG.delayBetweenRequests);
+
+  // Test 7: Everything - Specific Domains
+  await runTest('Everything - TechCrunch & BBC', async (): Promise<EverythingResponse> => {
+    const params: EverythingParams = {
+      domains: 'techcrunch.com,bbc.co.uk',
+      q: 'startup',
+      language: 'en',
+      pageSize: 10
+    };
+    return await newsapi.v2.everything(params);
+  });
+
+  await delay(TEST_CONFIG.delayBetweenRequests);
+
+  // Test 8: Sources - All Available
+  await runTest('Sources - All Available', async (): Promise<SourcesResponse> => {
+    return await newsapi.v2.sources({});
+  });
+
+  await delay(TEST_CONFIG.delayBetweenRequests);
+
+  // Test 9: Sources - Technology Category
+  await runTest('Sources - Technology Category', async (): Promise<SourcesResponse> => {
+    const params: SourcesParams = {
+      category: 'technology',
+      language: 'en'
+    };
+    return await newsapi.v2.sources(params);
+  });
+
+  await delay(TEST_CONFIG.delayBetweenRequests);
+
+  // Test 10: Sources - By Country
+  await runTest('Sources - US Sources', async (): Promise<SourcesResponse> => {
+    const params: SourcesParams = {
+      country: 'us',
+      language: 'en'
+    };
+    return await newsapi.v2.sources(params);
+  });
+
+  console.log('\n✅ All tests completed!');
+}
+
+// Performance test function
+export async function performanceTest(): Promise<void> {
+  console.log('\n⚡ Running Performance Test');
+  
+  const startTime = Date.now();
+  
+  try {
+    const promises: Promise<NewsAPIResponse>[] = [
+      newsapi.v2.topHeadlines({ country: 'us', pageSize: 5 }),
+      newsapi.v2.everything({ q: 'javascript', pageSize: 5 }),
+      newsapi.v2.sources({ category: 'technology' })
+    ];
+
+    const results = await Promise.all(promises);
+    const endTime = Date.now();
+    
+    console.log(`✅ All 3 concurrent requests completed in ${endTime - startTime}ms`);
+    results.forEach((result, index) => {
+      const testNames = ['Top Headlines', 'Everything Search', 'Sources'];
+      console.log(`${testNames[index]}: ${result.status}`);
+    });
+  } catch (error) {
+    const err = error as Error;
+    console.error('❌ Performance test failed:', err.message);
   }
 }
+
+// Individual test functions for manual testing
+export const individualTests = {
+  // Test specific headline search
+  testHeadlineSearch: async (query: string): Promise<TopHeadlinesResponse | null> => {
+    return await runTest(`Headlines Search: "${query}"`, async (): Promise<TopHeadlinesResponse> => {
+      const params: TopHeadlinesParams = {
+        q: query,
+        language: 'en',
+        pageSize: 5
+      };
+      return await newsapi.v2.topHeadlines(params);
+    });
+  },
+
+  // Test specific source
+  testSource: async (sourceId: string): Promise<TopHeadlinesResponse | null> => {
+    return await runTest(`Source: ${sourceId}`, async (): Promise<TopHeadlinesResponse> => {
+      const params: TopHeadlinesParams = {
+        sources: sourceId,
+        pageSize: 5
+      };
+      return await newsapi.v2.topHeadlines(params);
+    });
+  },
+
+  // Test date range search
+  testDateRange: async (query: string, daysBack: number = 7): Promise<EverythingResponse | null> => {
+    const fromDate = new Date();
+    fromDate.setDate(fromDate.getDate() - daysBack);
+    
+    return await runTest(`Date Range Search: "${query}" (${daysBack} days)`, async (): Promise<EverythingResponse> => {
+      const params: EverythingParams = {
+        q: query,
+        from: fromDate.toISOString().split('T')[0],
+        language: 'en',
+        sortBy: 'publishedAt',
+        pageSize: 5
+      };
+      return await newsapi.v2.everything(params);
+    });
+  }
+};
+
+// Main execution
+async function main(): Promise<void> {
+  if (NEWS_API_KEY === 'your_api_key_here') {
+    console.log('⚠️  Please set your NEWS_API_KEY in environment variables or update the script');
+    console.log('You can get a free API key from: https://newsapi.org/');
+    return;
+  }
+
+  // Run all tests
+  await runAllTests();
+  
+  // Run performance test
+  await performanceTest();
+
+  // Example of using individual tests
+  console.log('\n🎯 Running Individual Tests');
+  await individualTests.testHeadlineSearch('climate change');
+  await delay(TEST_CONFIG.delayBetweenRequests);
+  await individualTests.testSource('techcrunch');
+  await delay(TEST_CONFIG.delayBetweenRequests);
+  await individualTests.testDateRange('cryptocurrency', 3);
+}
+
+// Export newsapi instance for external use
+export { newsapi };
 
 // Run tests if this file is executed directly
-if (require.main === module) {
-  testGNewsAPI();
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(console.error);
 }
-
-export { GNewsAPI, Article, GNewsResponse };
