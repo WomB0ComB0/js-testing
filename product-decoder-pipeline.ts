@@ -48,8 +48,8 @@ type SearchRecommendation = z.infer<typeof SearchRecommendationSchema>;
 
 // YouTube API Configuration
 const YOUTUBE_API_KEY = process.env.GOOGLE_YOUTUBE_API_KEY;
-const GOOGLE_SEARCH_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || '';
-const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || '';
+const GOOGLE_SEARCH_API_KEY = process.env.GOOGLE_SEARCH_API_KEY;
+const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID;
 
 // Initialize Google Custom Search
 const customSearch = new customsearch_v1.Customsearch({

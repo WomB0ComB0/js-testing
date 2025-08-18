@@ -40,6 +40,13 @@ declare global {
       GEMINI_API_KEY: string;
       OPENAI_API_KEY: string;
       MONGO_URI: string;
+      NEWS_API_KEY: string;
+      GNEWS_API_KEY: string;
+      ARTICLE_API_KEY: string;
+      FOOD_API_KEY: string;
+      GOOGLE_YOUTUBE_API_KEY: string;
+      GOOGLE_SEARCH_API_KEY: string;
+      GOOGLE_SEARCH_ENGINE_ID: string;
     }
   }
 }
