@@ -1,424 +1,199 @@
-import { config } from 'dotenv';
+import * as dotenv from 'dotenv';
 
-config();
+// Load environment variables
+dotenv.config();
 
-async function freePlanExamples() {
-  try {
-    // Very conservative settings for free plan
-    const api = new MediastackAPI(undefined, { 
-      isFreePlan: true,
-      minRequestInterval: 4000, // 4 seconds between requests
-      maxRequestsPerMinute: 15   // Very conservative
-    });
-
-    console.log('🆓 Free Plan Examples (Conservative Rate Limiting)\n');
-
-    // Example 1: Get latest news with more results in single request
-    console.log('=== Latest News (Single Request) ===');
-    const latestNews = await api.getNews({ 
-      limit: 10, // Get more results in fewer requests
-      sort: 'published_desc' 
-    });
-    
-    console.log(`Found ${latestNews.data.length} articles:`);
-    latestNews.data.slice(0, 5).forEach((article, index) => {
-      console.log(`${index + 1}. ${article.title}`);
-      console.log(`   Source: ${article.source} | Country: ${article.country.toUpperCase()}`);
-    });
-
-    const stats = api.getStats();
-    console.log(`\n📊 Used ${stats.requestCount} API calls so far`);
-
-    // Only make a second request if user wants to see more
-    console.log('\nMaking one more request for variety...');
-    
-    // Example 2: Get news from a different category
-    const businessNews = await api.getNewsByCategory(['business'], { 
-      limit: 5,
-      countries: 'us' // Limit to one country to get focused results
-    });
-    
-    if (businessNews.data.length > 0) {
-      console.log('\n=== Business News ===');
-      businessNews.data.forEach((article, index) => {
-        console.log(`${index + 1}. ${article.title}`);
-      });
-    } else {
-      console.log('\n=== Business News ===');
-      console.log('No business news available at the moment');
-    }
-
-    const finalStats = api.getStats();
-    console.log(`\n✅ Completed with ${finalStats.requestCount} total API calls`);
-    console.log('💡 Tip: Cache these results and reuse them to minimize API calls!');
-
-  } catch (error) {
-    console.error('❌ Error:', error instanceof Error ? error.message : error);
-  } 
-}
-
-// Type definitions
-interface PaginationInfo {
-  limit: number;
-  offset: number;
-  count: number;
-  total: number;
-}
-
-interface NewsArticle {
-  author: string | null;
+// Types based on GNews API documentation
+interface Article {
   title: string;
-  description: string | null;
+  description: string;
+  content: string;
   url: string;
-  source: string;
-  image: string | null;
-  category: string;
-  language: string;
-  country: string;
-  published_at: string;
-}
-
-interface NewsSource {
-  id: string;
-  name: string;
-  category: string;
-  country: string;
-  language: string;
-  url: string;
-}
-
-interface NewsResponse {
-  pagination: PaginationInfo;
-  data: NewsArticle[];
-}
-
-interface SourcesResponse {
-  pagination: PaginationInfo;
-  data: NewsSource[];
-}
-
-interface APIError {
-  error: {
-    code: string;
-    message: string;
-    context?: Record<string, string[]>;
+  image: string;
+  publishedAt: string;
+  source: {
+    name: string;
+    url: string;
   };
 }
 
-// Available categories
-type NewsCategory = 
-  | 'general'
-  | 'business' 
-  | 'entertainment'
-  | 'health'
-  | 'science'
-  | 'sports'
-  | 'technology';
-
-// Sort options
-type SortOption = 'published_desc' | 'popularity';
-
-// News request parameters
-interface NewsRequestParams {
-  sources?: string;
-  categories?: string;
-  countries?: string;
-  languages?: string;
-  keywords?: string;
-  date?: string;
-  sort?: SortOption;
-  limit?: number;
-  offset?: number;
+interface GNewsResponse {
+  totalArticles: number;
+  articles: Article[];
 }
 
-// Sources request parameters
-interface SourcesRequestParams {
-  search?: string;
-  countries?: string;
-  languages?: string;
-  categories?: string;
-  limit?: number;
-  offset?: number;
+interface GNewsError {
+  errors: string[];
 }
 
-class MediastackAPI {
-  private readonly apiKey: string;
-  private readonly baseUrl: string = 'https://api.mediastack.com/v1';
-  private lastRequestTime: number = 0;
-  private readonly minRequestInterval: number;
-  private requestCount: number = 0;
-  private readonly maxRequestsPerMinute: number;
+class GNewsAPI {
+  private apiKey: string;
+  private baseUrl: string = 'https://gnews.io/api/v4';
 
-  constructor(apiKey?: string, options?: { 
-    minRequestInterval?: number; 
-    maxRequestsPerMinute?: number;
-    isFreePlan?: boolean;
-  }) {
-    this.apiKey = apiKey || process.env.ARTICLE_API_KEY || '';
-    if (!this.apiKey) {
-      throw new Error('API key is required. Set ARTICLE_API_KEY environment variable or pass it to constructor.');
+  constructor() {
+    const apiKey = process.env.GNEWS_API_KEY;
+    if (!apiKey) {
+      throw new Error('GNEWS_API_KEY environment variable is required');
     }
-
-    // Default to free plan limits if not specified
-    const isFreePlan = options?.isFreePlan ?? true;
-    
-    // Free plan: be more conservative with rate limits
-    // Paid plans: allow more frequent requests
-    this.minRequestInterval = options?.minRequestInterval ?? (isFreePlan ? 2000 : 500); // ms between requests
-    this.maxRequestsPerMinute = options?.maxRequestsPerMinute ?? (isFreePlan ? 25 : 100);
+    this.apiKey = apiKey;
   }
 
-  private buildUrl(endpoint: string, params: Record<string, any>): string {
-    const url = new URL(`${this.baseUrl}/${endpoint}`);
-    url.searchParams.append('access_key', this.apiKey);
-    
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null) {
-        url.searchParams.append(key, value.toString());
-      }
+  /**
+   * Search for articles
+   */
+  async search(params: {
+    q: string;
+    lang?: string;
+    country?: string;
+    max?: number;
+    in?: string;
+    nullable?: string;
+    from?: string;
+    to?: string;
+    sortby?: 'relevance' | 'publishedAt';
+  }): Promise<GNewsResponse> {
+    const searchParams = new URLSearchParams({
+      apikey: this.apiKey,
+      ...Object.fromEntries(
+        Object.entries(params).map(([key, value]) => [key, String(value)])
+      )
     });
 
-    return url.toString();
-  }
-
-  private async rateLimitDelay(): Promise<void> {
-    const now = Date.now();
-    const timeSinceLastRequest = now - this.lastRequestTime;
-    
-    if (timeSinceLastRequest < this.minRequestInterval) {
-      const delayTime = this.minRequestInterval - timeSinceLastRequest;
-      console.log(`Rate limiting: waiting ${delayTime}ms before next request...`);
-      await new Promise(resolve => setTimeout(resolve, delayTime));
-    }
-    
-    this.lastRequestTime = Date.now();
-    this.requestCount++;
-  }
-
-  private async makeRequest<T>(endpoint: string, params: Record<string, any> = {}): Promise<T> {
-    // Apply rate limiting
-    await this.rateLimitDelay();
-    
-    const url = this.buildUrl(endpoint, params);
+    const url = `${this.baseUrl}/search?${searchParams}`;
     
     try {
       const response = await fetch(url);
-      const data = await response.json();
+      const data = await response.json() as GNewsResponse | GNewsError;
 
       if (!response.ok) {
-        const error = data as APIError;
-        
-        // Handle rate limit errors specifically
-        if (error.error.code === 'rate_limit_reached') {
-          console.error('❌ Rate limit exceeded. Consider:');
-          console.error('   - Reducing request frequency');
-          console.error('   - Upgrading to a paid plan');
-          console.error('   - Implementing longer delays between requests');
-          throw new Error(`Rate limit exceeded. Try again later or upgrade your plan.`);
-        }
-        
-        // Handle validation errors
-        if (error.error.code === 'validation_error') {
-          console.error('❌ Validation error. This might be due to:');
-          console.error('   - Invalid parameters for your plan level');
-          console.error('   - Endpoint not available on free plan');
-          console.error('   - Parameter formatting issue');
-          throw new Error(`Validation error: ${error.error.message}`);
-        }
-        
-        // Handle function access restrictions
-        if (error.error.code === 'function_access_restricted') {
-          console.error('❌ Feature not available on your current plan');
-          throw new Error(`Feature not available: ${error.error.message}`);
-        }
-        
-        throw new Error(`API Error (${error.error.code}): ${error.error.message}`);
+        const errorData = data as GNewsError;
+        throw new Error(`API Error: ${errorData.errors?.join(', ') || 'Unknown error'}`);
       }
 
-      console.log(`✅ Request successful (${this.requestCount} requests made)`);
-      return data as T;
+      return data as GNewsResponse;
     } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error('Unknown error occurred while making API request');
+      console.error('Search request failed:', error);
+      throw error;
     }
   }
 
   /**
-   * Get live news articles
+   * Get top headlines
    */
-  async getNews(params: NewsRequestParams = {}): Promise<NewsResponse> {
-    return this.makeRequest<NewsResponse>('news', params);
+  async getTopHeadlines(params?: {
+    lang?: string;
+    country?: string;
+    max?: number;
+    nullable?: string;
+    category?: 'general' | 'world' | 'nation' | 'business' | 'technology' | 'entertainment' | 'sports' | 'science' | 'health';
+  }): Promise<GNewsResponse> {
+    const searchParams = new URLSearchParams({
+      apikey: this.apiKey,
+      ...Object.fromEntries(
+        Object.entries(params || {}).map(([key, value]) => [key, String(value)])
+      )
+    });
+
+    const url = `${this.baseUrl}/top-headlines?${searchParams}`;
+    
+    try {
+      const response = await fetch(url);
+      const data = await response.json() as GNewsResponse | GNewsError;
+
+      if (!response.ok) {
+        const errorData = data as GNewsError;
+        throw new Error(`API Error: ${errorData.errors?.join(', ') || 'Unknown error'}`);
+      }
+
+      return data as GNewsResponse;
+    } catch (error) {
+      console.error('Top headlines request failed:', error);
+      throw error;
+    }
   }
 
   /**
-   * Get historical news articles (requires Standard plan or higher)
+   * Helper method to display articles in a formatted way
    */
-  async getHistoricalNews(date: string, params: Omit<NewsRequestParams, 'date'> = {}): Promise<NewsResponse> {
-    return this.makeRequest<NewsResponse>('news', { ...params, date });
-  }
-
-  /**
-   * Get news sources
-   */
-  async getSources(params: SourcesRequestParams = {}): Promise<SourcesResponse> {
-    return this.makeRequest<SourcesResponse>('sources', params);
-  }
-
-  /**
-   * Search news with keywords
-   */
-  async searchNews(keywords: string, params: Omit<NewsRequestParams, 'keywords'> = {}): Promise<NewsResponse> {
-    return this.makeRequest<NewsResponse>('news', { ...params, keywords });
-  }
-
-  /**
-   * Get news by category
-   */
-  async getNewsByCategory(categories: NewsCategory[], params: Omit<NewsRequestParams, 'categories'> = {}): Promise<NewsResponse> {
-    return this.makeRequest<NewsResponse>('news', { ...params, categories: categories.join(',') });
-  }
-
-  /**
-   * Get news by country
-   */
-  async getNewsByCountry(countries: string[], params: Omit<NewsRequestParams, 'countries'> = {}): Promise<NewsResponse> {
-    return this.makeRequest<NewsResponse>('news', { ...params, countries: countries.join(',') });
-  }
-
-  /**
-   * Get news by language
-   */
-  async getNewsByLanguage(languages: string[], params: Omit<NewsRequestParams, 'languages'> = {}): Promise<NewsResponse> {
-    return this.makeRequest<NewsResponse>('news', { ...params, languages: languages.join(',') });
-  }
-
-  /**
-   * Get request statistics
-   */
-  getStats(): { requestCount: number; lastRequestTime: number } {
-    return {
-      requestCount: this.requestCount,
-      lastRequestTime: this.lastRequestTime
-    };
-  }
-
-  /**
-   * Reset request counter (useful for testing or monthly resets)
-   */
-  resetStats(): void {
-    this.requestCount = 0;
-    this.lastRequestTime = 0;
-  }
-
-  /**
-   * Check if we're approaching rate limits
-   */
-  isApproachingRateLimit(): boolean {
-    return this.requestCount > (this.maxRequestsPerMinute * 0.8); // 80% of limit
+  displayArticles(articles: Article[], maxArticles: number = 5): void {
+    console.log(`\n📰 Displaying ${Math.min(articles.length, maxArticles)} articles:\n`);
+    
+    articles.slice(0, maxArticles).forEach((article, index) => {
+      console.log(`${index + 1}. ${article.title}`);
+      console.log(`   Source: ${article.source.name}`);
+      console.log(`   Published: ${new Date(article.publishedAt).toLocaleDateString()}`);
+      console.log(`   URL: ${article.url}`);
+      if (article.description) {
+        console.log(`   Description: ${article.description.substring(0, 150)}...`);
+      }
+      console.log('   ' + '─'.repeat(80));
+    });
   }
 }
 
-// Usage examples with rate limiting
-async function examples() {
+// Test function
+async function testGNewsAPI() {
   try {
-    // Initialize with free plan settings (more conservative)
-    const api = new MediastackAPI(undefined, { 
-      isFreePlan: true,
-      minRequestInterval: 3000, // 3 seconds between requests for free plan
-      maxRequestsPerMinute: 20   // Conservative limit
+    const gnews = new GNewsAPI();
+    
+    console.log('🔍 Testing GNews API...\n');
+
+    // Test 1: Search for specific topic
+    console.log('1️⃣ Testing search endpoint...');
+    const searchResults = await gnews.search({
+      q: 'artificial intelligence',
+      lang: 'en',
+      max: 5,
+      sortby: 'publishedAt'
     });
+    
+    console.log(`Found ${searchResults.totalArticles} articles about AI`);
+    gnews.displayArticles(searchResults.articles, 3);
 
-    console.log('🚀 Starting API examples with rate limiting...\n');
-
-    // Example 1: Get latest news
-    console.log('=== Latest News ===');
-    const latestNews = await api.getNews({ limit: 5 });
-    console.log(`Found ${latestNews.data.length} articles:`);
-    latestNews.data.forEach((article, index) => {
-      console.log(`${index + 1}. ${article.title} - ${article.source}`);
+    // Test 2: Get top headlines
+    console.log('\n2️⃣ Testing top headlines endpoint...');
+    const headlines = await gnews.getTopHeadlines({
+      category: 'technology',
+      lang: 'en',
+      max: 5
     });
+    
+    console.log(`Found ${headlines.totalArticles} top technology headlines`);
+    gnews.displayArticles(headlines.articles, 3);
 
-    // Check if we should continue
-    if (api.isApproachingRateLimit()) {
-      console.log('⚠️  Approaching rate limit, stopping examples early');
-      return;
-    }
-
-    // Example 2: Search for specific keywords (with longer delay)
-    console.log('\n=== Search for "technology" ===');
-    const techNews = await api.searchNews('technology', { limit: 3 });
-    techNews.data.forEach((article, index) => {
-      console.log(`${index + 1}. ${article.title}`);
+    // Test 3: Search with date range (last 7 days)
+    console.log('\n3️⃣ Testing search with date range...');
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    
+    const recentNews = await gnews.search({
+      q: 'climate change',
+      lang: 'en',
+      from: sevenDaysAgo.toISOString().split('T')[0],
+      max: 3,
+      sortby: 'publishedAt'
     });
+    
+    console.log(`Found ${recentNews.totalArticles} recent articles about climate change`);
+    gnews.displayArticles(recentNews.articles, 2);
 
-    // Show stats
-    const stats = api.getStats();
-    console.log(`\n📊 API Stats: ${stats.requestCount} requests made`);
-
-    // Only continue if we haven't hit limits
-    if (!api.isApproachingRateLimit()) {
-      console.log('\n=== Getting Sources (final request) ===');
-      try {
-        const sources = await api.getSources({ limit: 5 });
-        if (sources.data && sources.data.length > 0) {
-          sources.data.slice(0, 3).forEach((source, index) => {
-            console.log(`${index + 1}. ${source.name} (${source.country.toUpperCase()}) - ${source.category}`);
-          });
-        } else {
-          console.log('No sources returned (might be a plan limitation)');
-        }
-      } catch (sourceError) {
-        console.log('⚠️  Sources endpoint not available (might require paid plan)');
-        console.log('   Continuing with news-only examples...');
-      }
-    }
-
-    const finalStats = api.getStats();
-    console.log(`\n✅ Completed safely with ${finalStats.requestCount} total requests`);
+    console.log('\n✅ All tests completed successfully!');
 
   } catch (error) {
-    console.error('❌ Error:', error instanceof Error ? error.message : error);
+    console.error('❌ Test failed:', error);
     
-    // Provide helpful advice for rate limit errors
-    if (error instanceof Error && error.message.includes('Rate limit')) {
-      console.log('\n💡 Tips for free plan users:');
-      console.log('   - Wait a few minutes before trying again');
-      console.log('   - Make fewer concurrent requests');
-      console.log('   - Cache results to reduce API calls');
-      console.log('   - Consider combining multiple queries into one');
+    if (error instanceof Error) {
+      if (error.message.includes('GNEWS_API_KEY')) {
+        console.log('\n💡 Make sure to set your GNEWS_API_KEY environment variable');
+        console.log('   You can create a .env file with: GNEWS_API_KEY=your_api_key_here');
+      }
     }
   }
 }
 
-// Helper functions
-export function formatDate(date: Date): string {
-  return date.toISOString().split('T')[0];
-}
-
-export function getDateRange(startDate: Date, endDate: Date): string {
-  return `${formatDate(startDate)},${formatDate(endDate)}`;
-}
-
-// Export the main class and types
-export {
-  MediastackAPI,
-  type NewsArticle,
-  type NewsSource,
-  type NewsResponse,
-  type SourcesResponse,
-  type NewsRequestParams,
-  type SourcesRequestParams,
-  type NewsCategory,
-  type SortOption
-};
-
-// Run examples if this file is executed directly
+// Run tests if this file is executed directly
 if (require.main === module) {
-  // Use the safer free plan examples by default
-  freePlanExamples();
-  
-  // Uncomment below to run the original examples instead
-  // examples();
+  testGNewsAPI();
 }
+
+export { GNewsAPI, Article, GNewsResponse };
