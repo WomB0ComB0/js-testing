@@ -14,11 +14,8 @@
  * limitations under the License.
  */
 
-// Testing
-// Test 2
-// Test 3
-import axios from "axios";
-import { customsearch_v1, youtube_v3 } from 'googleapis';
+import axios from 'axios';
+import { customsearch_v1 } from 'googleapis';
 import { z } from 'zod';
 
 const SearchRecommendationSchema = z.object({
@@ -46,19 +43,14 @@ const SearchRecommendationSchema = z.object({
 
 type SearchRecommendation = z.infer<typeof SearchRecommendationSchema>;
 
-// YouTube API Configuration
-const YOUTUBE_API_KEY = process.env.GOOGLE_YOUTUBE_API_KEY;
-const GOOGLE_SEARCH_API_KEY = process.env.GOOGLE_SEARCH_API_KEY;
+// API Configuration
+const YOUTUBE_API_KEY = process.env.GOOGLE_API_KEY;
+const GOOGLE_SEARCH_API_KEY = process.env.GOOGLE_API_KEY;
 const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID;
 
-// Initialize Google Custom Search
+// Initialize Google Custom Search client
 const customSearch = new customsearch_v1.Customsearch({
   key: GOOGLE_SEARCH_API_KEY,
-});
-
-// Initialize YouTube API
-const youtube = new youtube_v3.Youtube({
-  key: YOUTUBE_API_KEY,
 });
 
 /**
@@ -70,33 +62,44 @@ function truncateQuery(query: string, maxLength = 100): string {
 }
 
 /**
- * Searches YouTube videos using the YouTube Data API v3
+ * Searches YouTube videos by calling the YouTube Data API v3 endpoint directly.
  */
 export const searchYouTube = async (query: string, pageToken?: string) => {
   if (!YOUTUBE_API_KEY) {
     throw new Error('YouTube API key is missing');
   }
 
+  const YOUTUBE_SEARCH_ENDPOINT = 'https://www.googleapis.com/youtube/v3/search';
+
+  const params: {
+    part: string;
+    q: string;
+    type: string;
+    maxResults: number;
+    key: string;
+    pageToken?: string;
+  } = {
+    part: 'snippet',
+    q: query,
+    type: 'video',
+    maxResults: 10,
+    key: YOUTUBE_API_KEY,
+  };
+
+  if (pageToken) {
+    params.pageToken = pageToken;
+  }
+
   try {
-    const params: {
-      part: string[];
-      q: string;
-      type: string;
-      maxResults: number;
-      pageToken?: string;
-    } = {
-      part: ['snippet'],
-      q: query,
-      type: 'video',
-      maxResults: 10,
-    };
-
-    if (pageToken) params.pageToken = pageToken;
-
-    const response = await youtube.search.list(params);
-    
+    const response = await axios.get(YOUTUBE_SEARCH_ENDPOINT, { params });
     return response.data;
   } catch (error) {
+    // Provide more specific error details if available from axios
+    if (axios.isAxiosError(error)) {
+      const errorDetails = error.response?.data?.error?.message || error.message;
+      throw new Error(`Error searching YouTube: ${errorDetails}`);
+    }
+    // Fallback for other types of errors
     throw new Error(
       `Error searching YouTube: ${error instanceof Error ? error.message : String(error)}`
     );
@@ -104,7 +107,7 @@ export const searchYouTube = async (query: string, pageToken?: string) => {
 };
 
 /**
- * Performs a Google Custom Search
+ * Performs a Google Custom Search using the googleapis client library.
  */
 export const search = async (query: string): Promise<SearchRecommendation> => {
   if (!GOOGLE_SEARCH_API_KEY || !GOOGLE_SEARCH_ENGINE_ID) {
@@ -150,3 +153,64 @@ export const search = async (query: string): Promise<SearchRecommendation> => {
     );
   }
 };
+
+
+// =================================================================
+// ======================== USAGE EXAMPLES =========================
+// =================================================================
+
+/**
+ * An asynchronous main function to run the examples.
+ * This is a common pattern to allow the use of 'await' at the top level.
+ */
+async function main() {
+  const sampleQuery = "TypeScript tutorials for beginners";
+
+  console.log(`Running examples with query: "${sampleQuery}"\n`);
+
+  // --- Example 1: Search YouTube ---
+  console.log("--- Running YouTube Search Example ---");
+  try {
+    const youtubeResults = await searchYouTube(sampleQuery);
+    console.log("YouTube search successful!");
+
+    // Log the title of the first video, if it exists
+    if (youtubeResults.items && youtubeResults.items.length > 0) {
+      console.log(`First video title: ${youtubeResults.items[0].snippet?.title}`);
+      console.log(`Total results in this page: ${youtubeResults.items.length}`);
+    } else {
+      console.log("No YouTube videos found for this query.");
+    }
+    // console.log("Full YouTube Response:", JSON.stringify(youtubeResults, null, 2)); // Uncomment to see the full response
+  } catch (error) {
+    console.error("YouTube search failed:", error);
+  }
+
+  console.log("\n" + "-".repeat(40) + "\n");
+
+  // --- Example 2: Perform a Google Custom Search ---
+  console.log("--- Running Google Custom Search Example ---");
+  try {
+    const searchResults = await search(sampleQuery);
+    console.log("Google Custom Search successful!");
+    
+    // Log some metadata from the search
+    console.log(`Found ${searchResults.info.formattedTotalResults} results in ${searchResults.info.formattedSearchTime} seconds.`);
+
+    // Log the title and link of the first result, if it exists
+    if (searchResults.items.length > 0) {
+      console.log(`First result title: ${searchResults.items[0].title}`);
+      console.log(`First result link: ${searchResults.items[0].link}`);
+    } else {
+      console.log("No search results found for this query.");
+    }
+    // console.log("Full Custom Search Response:", JSON.stringify(searchResults, null, 2)); // Uncomment to see the full response
+  } catch (error) {
+    console.error("Google Custom Search failed:", error);
+  }
+}
+
+// Execute the main function and catch any top-level errors.
+main().catch(error => {
+  console.error("An unexpected error occurred:", error);
+});

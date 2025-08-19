@@ -38,6 +38,7 @@ declare global {
       REPO_OWNER: string;
       REPO_NAME: string;
       GEMINI_API_KEY: string;
+      GOOGLE_API_KEY: string;
       OPENAI_API_KEY: string;
       MONGO_URI: string;
       NEWS_API_KEY: string;
