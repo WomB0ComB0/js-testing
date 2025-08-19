@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-(async () =>{
-  return new Promise((resolve) => {
-    resolve(0);
-  });
+(async () => {
+	return new Promise((resolve) => {
+		resolve(0);
+	});
 })();

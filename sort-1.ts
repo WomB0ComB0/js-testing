@@ -29,266 +29,268 @@
  * performance characteristics.
  */
 export class Algorithms {
-  /**
-   * The array to be sorted.
-   * @private
-   * @name _array
-   * @type {number[]}
-   * @description Stores the input array in a protected manner to prevent external modification.
-   * A copy is made during initialization to preserve the original array.
-   */
-  private readonly _array: number[];
+	/**
+	 * The array to be sorted.
+	 * @private
+	 * @name _array
+	 * @type {number[]}
+	 * @description Stores the input array in a protected manner to prevent external modification.
+	 * A copy is made during initialization to preserve the original array.
+	 */
+	private readonly _array: number[];
 
-  /**
-   * Creates an instance of Algorithms with sorting methods.
-   * @constructor
-   * @param {number[]} array - The input array to be sorted
-   * @description Initializes a new instance with a deep copy of the input array.
-   * The original array remains unmodified throughout all sorting operations.
-   * @example
-   * ```typescript
-   * const sorter = new Algorithms([3, 1, 4, 1, 5, 9]);
-   * ```
-   */
-  constructor(array: number[]) {
-    this._array = [...array];
-  }
+	/**
+	 * Creates an instance of Algorithms with sorting methods.
+	 * @constructor
+	 * @param {number[]} array - The input array to be sorted
+	 * @description Initializes a new instance with a deep copy of the input array.
+	 * The original array remains unmodified throughout all sorting operations.
+	 * @example
+	 * ```typescript
+	 * const sorter = new Algorithms([3, 1, 4, 1, 5, 9]);
+	 * ```
+	 */
+	constructor(array: number[]) {
+		this._array = [...array];
+	}
 
-  /**
-   * Swaps two elements in an array.
-   * @private
-   * @static
-   * @param {number[]} arr - The array containing elements to swap
-   * @param {number} i - First index
-   * @param {number} j - Second index
-   * @throws {Error} If indices are out of bounds
-   * @description Performs an in-place swap of two elements using destructuring assignment.
-   * Includes bounds checking to prevent array access errors.
-   * @example
-   * ```typescript
-   * Algorithms.swap([1, 2], 0, 1); // [2, 1]
-   * ```
-   */
-  private static swap(arr: number[], i: number, j: number): void {
-    if (i < 0 || j < 0 || i >= arr.length || j >= arr.length) {
-      throw new Error('Swap indices out of array bounds');
-    }
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
+	/**
+	 * Swaps two elements in an array.
+	 * @private
+	 * @static
+	 * @param {number[]} arr - The array containing elements to swap
+	 * @param {number} i - First index
+	 * @param {number} j - Second index
+	 * @throws {Error} If indices are out of bounds
+	 * @description Performs an in-place swap of two elements using destructuring assignment.
+	 * Includes bounds checking to prevent array access errors.
+	 * @example
+	 * ```typescript
+	 * Algorithms.swap([1, 2], 0, 1); // [2, 1]
+	 * ```
+	 */
+	private static swap(arr: number[], i: number, j: number): void {
+		if (i < 0 || j < 0 || i >= arr.length || j >= arr.length) {
+			throw new Error("Swap indices out of array bounds");
+		}
+		[arr[i], arr[j]] = [arr[j], arr[i]];
+	}
 
-  /**
-   * Performs Bubble Sort with optimized early termination.
-   * @static
-   * @param {number[]} arr - Array to be sorted
-   * @returns {number[]} Sorted array
-   * @description
-   * Implements bubble sort with the following characteristics:
-   * - Time Complexity: O(n²) worst and average case, O(n) best case
-   * - Space Complexity: O(1)
-   * - Stable: Yes
-   * - In-place: Yes
-   *
-   * Optimizations:
-   * - Early termination if no swaps occur in a pass
-   * - Reduces the inner loop range by i each iteration
-   *
-   * Best used for:
-   * - Small datasets
-   * - Nearly sorted arrays
-   * - Educational purposes
-   *
-   * @example
-   * ```typescript
-   * Algorithms.bubbleSort([64, 34, 25, 12, 22, 11, 90]);
-   * // returns [11, 12, 22, 25, 34, 64, 90]
-   * ```
-   */
-  public static bubbleSort(arr: number[]): number[] {
-    if (!arr || arr.length <= 1) return arr;
+	/**
+	 * Performs Bubble Sort with optimized early termination.
+	 * @static
+	 * @param {number[]} arr - Array to be sorted
+	 * @returns {number[]} Sorted array
+	 * @description
+	 * Implements bubble sort with the following characteristics:
+	 * - Time Complexity: O(n²) worst and average case, O(n) best case
+	 * - Space Complexity: O(1)
+	 * - Stable: Yes
+	 * - In-place: Yes
+	 *
+	 * Optimizations:
+	 * - Early termination if no swaps occur in a pass
+	 * - Reduces the inner loop range by i each iteration
+	 *
+	 * Best used for:
+	 * - Small datasets
+	 * - Nearly sorted arrays
+	 * - Educational purposes
+	 *
+	 * @example
+	 * ```typescript
+	 * Algorithms.bubbleSort([64, 34, 25, 12, 22, 11, 90]);
+	 * // returns [11, 12, 22, 25, 34, 64, 90]
+	 * ```
+	 */
+	public static bubbleSort(arr: number[]): number[] {
+		if (!arr || arr.length <= 1) return arr;
 
-    const n = arr.length;
-    for (let i = 0; i < n - 1; i++) {
-      let swapped = false;
+		const n = arr.length;
+		for (let i = 0; i < n - 1; i++) {
+			let swapped = false;
 
-      for (let j = 0; j < n - i - 1; j++) {
-        if (arr[j] > arr[j + 1]) {
-          this.swap(arr, j, j + 1);
-          swapped = true;
-        }
-      }
+			for (let j = 0; j < n - i - 1; j++) {
+				if (arr[j] > arr[j + 1]) {
+					Algorithms.swap(arr, j, j + 1);
+					swapped = true;
+				}
+			}
 
-      if (!swapped) break;
-    }
-    return arr;
-  }
+			if (!swapped) break;
+		}
+		return arr;
+	}
 
-  /**
-   * Performs Selection Sort.
-   * @static
-   * @param {number[]} arr - Array to be sorted
-   * @param {number} [size] - Optional size parameter (defaults to full array length)
-   * @returns {number[]} Sorted array
-   * @description
-   * Implements selection sort with the following characteristics:
-   * - Time Complexity: O(n²) for all cases
-   * - Space Complexity: O(1)
-   * - Stable: No
-   * - In-place: Yes
-   *
-   * Algorithm steps:
-   * 1. Find minimum element in unsorted portion
-   * 2. Swap with first unsorted position
-   * 3. Repeat until array is sorted
-   *
-   * Best used for:
-   * - Small arrays
-   * - Arrays with large elements but small keys
-   * - When memory is limited
-   *
-   * @example
-   * ```typescript
-   * Algorithms.selectionSort([64, 25, 12, 22, 11]);
-   * // returns [11, 12, 22, 25, 64]
-   * ```
-   */
-  public static selectionSort(arr: number[], size?: number): number[] {
-    if (!arr || arr.length <= 1) return arr;
+	/**
+	 * Performs Selection Sort.
+	 * @static
+	 * @param {number[]} arr - Array to be sorted
+	 * @param {number} [size] - Optional size parameter (defaults to full array length)
+	 * @returns {number[]} Sorted array
+	 * @description
+	 * Implements selection sort with the following characteristics:
+	 * - Time Complexity: O(n²) for all cases
+	 * - Space Complexity: O(1)
+	 * - Stable: No
+	 * - In-place: Yes
+	 *
+	 * Algorithm steps:
+	 * 1. Find minimum element in unsorted portion
+	 * 2. Swap with first unsorted position
+	 * 3. Repeat until array is sorted
+	 *
+	 * Best used for:
+	 * - Small arrays
+	 * - Arrays with large elements but small keys
+	 * - When memory is limited
+	 *
+	 * @example
+	 * ```typescript
+	 * Algorithms.selectionSort([64, 25, 12, 22, 11]);
+	 * // returns [11, 12, 22, 25, 64]
+	 * ```
+	 */
+	public static selectionSort(arr: number[], size?: number): number[] {
+		if (!arr || arr.length <= 1) return arr;
 
-    const n = size ?? arr.length;
+		const n = size ?? arr.length;
 
-    for (let i = 0; i < n - 1; i++) {
-      let minIndex = i;
+		for (let i = 0; i < n - 1; i++) {
+			let minIndex = i;
 
-      for (let j = i + 1; j < n; j++) {
-        if (arr[j] < arr[minIndex]) {
-          minIndex = j;
-        }
-      }
+			for (let j = i + 1; j < n; j++) {
+				if (arr[j] < arr[minIndex]) {
+					minIndex = j;
+				}
+			}
 
-      if (minIndex !== i) {
-        this.swap(arr, i, minIndex);
-      }
-    }
-    return arr;
-  }
+			if (minIndex !== i) {
+				Algorithms.swap(arr, i, minIndex);
+			}
+		}
+		return arr;
+	}
 
-  /**
-   * Performs Insertion Sort.
-   * @static
-   * @param {number[]} arr - Array to be sorted
-   * @returns {number[]} Sorted array
-   * @description
-   * Implements insertion sort with the following characteristics:
-   * - Time Complexity: O(n²) worst/average case, O(n) best case
-   * - Space Complexity: O(1)
-   * - Stable: Yes
-   * - In-place: Yes
-   *
-   * Key features:
-   * - Efficient for small data sets
-   * - Adaptive: O(n) when nearly sorted
-   * - Online: can sort as data arrives
-   *
-   * Best used for:
-   * - Small datasets
-   * - Nearly sorted arrays
-   * - Online/streaming data
-   * - When stable sort is required
-   *
-   * @example
-   * ```typescript
-   * Algorithms.insertionSort([5, 2, 4, 6, 1, 3]);
-   * // returns [1, 2, 3, 4, 5, 6]
-   * ```
-   */
-  public static insertionSort(arr: number[]): number[] {
-    if (!arr || arr.length <= 1) return arr;
+	/**
+	 * Performs Insertion Sort.
+	 * @static
+	 * @param {number[]} arr - Array to be sorted
+	 * @returns {number[]} Sorted array
+	 * @description
+	 * Implements insertion sort with the following characteristics:
+	 * - Time Complexity: O(n²) worst/average case, O(n) best case
+	 * - Space Complexity: O(1)
+	 * - Stable: Yes
+	 * - In-place: Yes
+	 *
+	 * Key features:
+	 * - Efficient for small data sets
+	 * - Adaptive: O(n) when nearly sorted
+	 * - Online: can sort as data arrives
+	 *
+	 * Best used for:
+	 * - Small datasets
+	 * - Nearly sorted arrays
+	 * - Online/streaming data
+	 * - When stable sort is required
+	 *
+	 * @example
+	 * ```typescript
+	 * Algorithms.insertionSort([5, 2, 4, 6, 1, 3]);
+	 * // returns [1, 2, 3, 4, 5, 6]
+	 * ```
+	 */
+	public static insertionSort(arr: number[]): number[] {
+		if (!arr || arr.length <= 1) return arr;
 
-    const n = arr.length;
+		const n = arr.length;
 
-    for (let i = 1; i < n; i++) {
-      const key = arr[i];
-      let j = i - 1;
+		for (let i = 1; i < n; i++) {
+			const key = arr[i];
+			let j = i - 1;
 
-      while (j >= 0 && arr[j] > key) {
-        arr[j + 1] = arr[j];
-        j--;
-      }
+			while (j >= 0 && arr[j] > key) {
+				arr[j + 1] = arr[j];
+				j--;
+			}
 
-      arr[j + 1] = key;
-    }
-    return arr;
-  }
+			arr[j + 1] = key;
+		}
+		return arr;
+	}
 
-  /**
-   * Provides a method to sort the instance's array using a specified sorting algorithm.
-   * @param {'bubble' | 'selection' | 'insertion'} [method='bubble'] - The sorting method to use
-   * @returns {number[]} Sorted array
-   * @description
-   * Factory method that provides a unified interface to all sorting algorithms.
-   * Creates a copy of the internal array before sorting to maintain immutability.
-   *
-   * Available methods:
-   * - 'bubble': Bubble sort, good for nearly sorted arrays
-   * - 'selection': Selection sort, minimizes swaps
-   * - 'insertion': Insertion sort, efficient for small arrays
-   *
-   * @example
-   * ```typescript
-   * const sorter = new Algorithms([3, 1, 4, 1, 5, 9]);
-   * const sorted = sorter.sort('insertion');
-   * ```
-   */
-  public sort(method: 'bubble' | 'selection' | 'insertion' = 'bubble'): number[] {
-    const arrayCopy = [...this._array];
+	/**
+	 * Provides a method to sort the instance's array using a specified sorting algorithm.
+	 * @param {'bubble' | 'selection' | 'insertion'} [method='bubble'] - The sorting method to use
+	 * @returns {number[]} Sorted array
+	 * @description
+	 * Factory method that provides a unified interface to all sorting algorithms.
+	 * Creates a copy of the internal array before sorting to maintain immutability.
+	 *
+	 * Available methods:
+	 * - 'bubble': Bubble sort, good for nearly sorted arrays
+	 * - 'selection': Selection sort, minimizes swaps
+	 * - 'insertion': Insertion sort, efficient for small arrays
+	 *
+	 * @example
+	 * ```typescript
+	 * const sorter = new Algorithms([3, 1, 4, 1, 5, 9]);
+	 * const sorted = sorter.sort('insertion');
+	 * ```
+	 */
+	public sort(
+		method: "bubble" | "selection" | "insertion" = "bubble",
+	): number[] {
+		const arrayCopy = [...this._array];
 
-    switch (method) {
-      case 'bubble':
-        return Algorithms.bubbleSort(arrayCopy);
-      case 'selection':
-        return Algorithms.selectionSort(arrayCopy);
-      case 'insertion':
-        return Algorithms.insertionSort(arrayCopy);
-    }
-  }
+		switch (method) {
+			case "bubble":
+				return Algorithms.bubbleSort(arrayCopy);
+			case "selection":
+				return Algorithms.selectionSort(arrayCopy);
+			case "insertion":
+				return Algorithms.insertionSort(arrayCopy);
+		}
+	}
 
-  /**
-   * Compares performance of different sorting algorithms.
-   * @returns {Record<string, number>} Performance metrics for each sorting method
-   * @description
-   * Benchmarks all available sorting algorithms using performance.now().
-   * Returns an object containing execution times in milliseconds for each method.
-   *
-   * Measured algorithms:
-   * - Bubble Sort
-   * - Selection Sort
-   * - Insertion Sort
-   *
-   * Note: Results may vary based on:
-   * - Input size
-   * - Input distribution
-   * - System performance
-   * - Current CPU load
-   *
-   * @example
-   * ```typescript
-   * const sorter = new Algorithms([]);
-   * const metrics = sorter.comparePerformance();
-   * console.log(metrics);
-   * // Output: { bubble: 0.5, selection: 0.3, insertion: 0.4 }
-   * ```
-   */
-  public comparePerformance(): Record<string, number> {
-    const methods = ['bubble', 'selection', 'insertion'] as const;
-    const results: Record<string, number> = {};
+	/**
+	 * Compares performance of different sorting algorithms.
+	 * @returns {Record<string, number>} Performance metrics for each sorting method
+	 * @description
+	 * Benchmarks all available sorting algorithms using performance.now().
+	 * Returns an object containing execution times in milliseconds for each method.
+	 *
+	 * Measured algorithms:
+	 * - Bubble Sort
+	 * - Selection Sort
+	 * - Insertion Sort
+	 *
+	 * Note: Results may vary based on:
+	 * - Input size
+	 * - Input distribution
+	 * - System performance
+	 * - Current CPU load
+	 *
+	 * @example
+	 * ```typescript
+	 * const sorter = new Algorithms([]);
+	 * const metrics = sorter.comparePerformance();
+	 * console.log(metrics);
+	 * // Output: { bubble: 0.5, selection: 0.3, insertion: 0.4 }
+	 * ```
+	 */
+	public comparePerformance(): Record<string, number> {
+		const methods = ["bubble", "selection", "insertion"] as const;
+		const results: Record<string, number> = {};
 
-    methods.forEach((method) => {
-      const start = performance.now();
-      this.sort(method);
-      const end = performance.now();
-      results[method] = end - start;
-    });
+		methods.forEach((method) => {
+			const start = performance.now();
+			this.sort(method);
+			const end = performance.now();
+			results[method] = end - start;
+		});
 
-    return results;
-  }
+		return results;
+	}
 }

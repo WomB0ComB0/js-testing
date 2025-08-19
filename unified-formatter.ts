@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import * as path from 'path';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as readline from 'readline';
 
 function selfExecute<T extends { new(...args: any[]): {} }>(constructor: T) {

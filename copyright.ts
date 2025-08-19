@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
-import { execSync } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { execSync } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
 
 interface FormatType {
-  regex: RegExp;
-  header?: string;
-  body: string;
-  footer?: string;
+	regex: RegExp;
+	header?: string;
+	body: string;
+	footer?: string;
 }
 
-const FILE_OPTS: { encoding: 'utf-8' } = { encoding: 'utf-8' };
+const FILE_OPTS: { encoding: "utf-8" } = { encoding: "utf-8" };
 const FORMAT_TYPES: FormatType[] = [
-  { regex: /\.((ts))$/, header: '/**', body: ' *', footer: ' */' },
+	{ regex: /\.((ts))$/, header: "/**", body: " *", footer: " */" },
 ];
 const COPYRIGHT = ` Copyright ${new Date().getFullYear()} Mike Odnis
 
@@ -43,71 +43,79 @@ const COPYRIGHT = ` Copyright ${new Date().getFullYear()} Mike Odnis
  limitations under the License.`;
 
 async function fileExists(path: string): Promise<boolean> {
-  try {
-    await readFile(path);
-    return true;
-  } catch {
-    return false;
-  }
+	try {
+		await readFile(path);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 async function getSourceFilesToUpdate() {
-  const paths = (
-    execSync('git ls-files', FILE_OPTS) +
-    '\n' +
-    execSync('git ls-files -o --exclude-standard', FILE_OPTS)
-  )
-    .split('\n')
-    .filter((p) => !!p);
+	const paths = (
+		execSync("git ls-files", FILE_OPTS) +
+		"\n" +
+		execSync("git ls-files -o --exclude-standard", FILE_OPTS)
+	)
+		.split("\n")
+		.filter((p) => !!p);
 
-  const existingPaths = (
-    await Promise.all(paths.map(async (path) => ((await fileExists(path)) ? path : null)))
-  ).filter((path) => path !== null) as string[];
+	const existingPaths = (
+		await Promise.all(
+			paths.map(async (path) => ((await fileExists(path)) ? path : null)),
+		)
+	).filter((path) => path !== null) as string[];
 
-  const fileContents = await Promise.all(
-    existingPaths.map((path) => readFile(path, { encoding: 'utf-8' })),
-  );
+	const fileContents = await Promise.all(
+		existingPaths.map((path) => readFile(path, { encoding: "utf-8" })),
+	);
 
-  return fileContents
-    .map((contents, idx) => ({
-      contents,
-      path: existingPaths[idx],
-      format: FORMAT_TYPES.find(({ regex }) => regex.test(existingPaths[idx])),
-    }))
-    .filter(({ contents, format }) => format && !/Copyright \d\d\d\d/.test(contents));
+	return fileContents
+		.map((contents, idx) => ({
+			contents,
+			path: existingPaths[idx],
+			format: FORMAT_TYPES.find(({ regex }) => regex.test(existingPaths[idx])),
+		}))
+		.filter(
+			({ contents, format }) => format && !/Copyright \d\d\d\d/.test(contents),
+		);
 }
 
 function updateContent(content: string, format: FormatType): string {
-  const header = format.header ? `${format.header}\n` : '';
-  const body = COPYRIGHT.split('\n')
-    .map((l) => format.body + l)
-    .join('\n');
-  const footer = format.footer ? `\n${format.footer}` : '';
+	const header = format.header ? `${format.header}\n` : "";
+	const body = COPYRIGHT.split("\n")
+		.map((l) => format.body + l)
+		.join("\n");
+	const footer = format.footer ? `\n${format.footer}` : "";
 
-  return `${header}${body}${footer}\n\n${content}`;
+	return `${header}${body}${footer}\n\n${content}`;
 }
 
-console.log('Checking copyright in sources...');
+console.log("Checking copyright in sources...");
 
 (async () => {
-  const missing = await getSourceFilesToUpdate();
-  if (process.argv[2] === '--check') {
-    if (missing.length) {
-      console.error(`Copyright header missing in ${missing.map(({ path }) => path).join(', ')}`);
-      console.error('Run `npm run format` at root to update');
-      process.exit(1);
-    }
-    console.log('Copyright headers okay');
-    process.exit(0);
-  }
+	const missing = await getSourceFilesToUpdate();
+	if (process.argv[2] === "--check") {
+		if (missing.length) {
+			console.error(
+				`Copyright header missing in ${missing.map(({ path }) => path).join(", ")}`,
+			);
+			console.error("Run `npm run format` at root to update");
+			process.exit(1);
+		}
+		console.log("Copyright headers okay");
+		process.exit(0);
+	}
 
-  const updated = missing.map((m) => {
-    m.contents = updateContent(m.contents, m.format!);
-    return m;
-  });
+	const updated = missing.map((m) => {
+		m.contents = updateContent(m.contents, m.format!);
+		return m;
+	});
 
-  await Promise.all(
-    updated.map(({ path, contents }) => writeFile(path, contents, { encoding: 'utf-8' })),
-  );
-  console.log(`Updated copyright headers in ${updated.length} files`);
+	await Promise.all(
+		updated.map(({ path, contents }) =>
+			writeFile(path, contents, { encoding: "utf-8" }),
+		),
+	);
+	console.log(`Updated copyright headers in ${updated.length} files`);
 })();

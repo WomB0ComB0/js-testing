@@ -24,14 +24,14 @@
  * @module fire-crawl-cli
  */
 
-import FireCrawlApp, { MapParams } from '@mendable/firecrawl-js';
+import fs from 'node:fs';
+import path from 'node:path';
+import FireCrawlApp, { type MapParams } from '@mendable/firecrawl-js';
+import chalk from 'chalk';
 import { Command } from 'commander';
 import * as dotenv from 'dotenv';
-import fs from 'node:fs';
 import fsPromises from 'fs/promises';
-import path from 'node:path';
 import ora from 'ora';
-import chalk from 'chalk';
 
 /**
  * Load environment variables from .env file

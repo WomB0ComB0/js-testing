@@ -14,81 +14,84 @@
  * limitations under the License.
  */
 
-import { Octokit } from '@octokit/rest';
-import { env, argv } from 'bun';
+import { Octokit } from "@octokit/rest";
+import { argv, env } from "bun";
 
-function selfExecute<T extends { new(...args: any[]): {} }>(constructor: T): T {
-  new constructor();
-  return constructor;
+function selfExecute<T extends { new (...args: any[]): {} }>(
+	constructor: T,
+): T {
+	new constructor();
+	return constructor;
 }
 
 @selfExecute
 class Main {
-  private octokit: Octokit;
-  private args: [string, ...string[]] = argv.slice(2) as [string, ...string[]];
-  private fundingContent: string[] = [
-    'github: WomB0ComB0',
-    'open_collective: mike-odnis', 
-    'ko_fi: Y8Y77AJEA',
-    'buy_me_a_coffee: mikeodnis'
-  ] as const;
+	private octokit: Octokit;
+	private args: [string, ...string[]] = argv.slice(2) as [string, ...string[]];
+	private fundingContent: string[] = [
+		"github: WomB0ComB0",
+		"open_collective: mike-odnis",
+		"ko_fi: Y8Y77AJEA",
+		"buy_me_a_coffee: mikeodnis",
+	] as const;
 
-  constructor() {
-    if (!env.GITHUB_TOKEN) {
-      throw new Error('GITHUB_TOKEN environment variable is required');
-    }
-    
-    this.octokit = new Octokit({ auth: env.GITHUB_TOKEN });
+	constructor() {
+		if (!env.GITHUB_TOKEN) {
+			throw new Error("GITHUB_TOKEN environment variable is required");
+		}
 
-    if (this.args.length < 2) {
-      throw new Error('Owner and repo arguments are required');
-    }
+		this.octokit = new Octokit({ auth: env.GITHUB_TOKEN });
 
-    if (require.main === module) {
-      this.updateFundingFile();
-    }
-  }
+		if (this.args.length < 2) {
+			throw new Error("Owner and repo arguments are required");
+		}
 
-  async updateFundingFile() {
-    const [owner, repo, path = '.github/FUNDING.yml'] = this.args;
-    const content = Buffer.from(this.fundingContent.join('\n') + '\n').toString('base64');
+		if (require.main === module) {
+			this.updateFundingFile();
+		}
+	}
 
-    try {
-      // Try to get existing file first
-      const { data } = await this.octokit.repos.getContent({
-        owner,
-        repo, 
-        path
-      });
+	async updateFundingFile() {
+		const [owner, repo, path = ".github/FUNDING.yml"] = this.args;
+		const content = Buffer.from(this.fundingContent.join("\n") + "\n").toString(
+			"base64",
+		);
 
-      // Update existing file
-      await this.octokit.repos.createOrUpdateFileContents({
-        owner,
-        repo,
-        path,
-        message: 'Update FUNDING.yml',
-        content,
-        sha: (data as any).sha
-      });
+		try {
+			// Try to get existing file first
+			const { data } = await this.octokit.repos.getContent({
+				owner,
+				repo,
+				path,
+			});
 
-      console.log('Successfully updated FUNDING.yml');
+			// Update existing file
+			await this.octokit.repos.createOrUpdateFileContents({
+				owner,
+				repo,
+				path,
+				message: "Update FUNDING.yml",
+				content,
+				sha: (data as any).sha,
+			});
 
-    } catch (error: any) {
-      if (error.status === 404) {
-        // Create new file if it doesn't exist
-        await this.octokit.repos.createOrUpdateFileContents({
-          owner,
-          repo,
-          path,
-          message: 'Create FUNDING.yml',
-          content
-        });
-        
-        console.log('Successfully created FUNDING.yml');
-      } else {
-        console.error('Error updating FUNDING.yml:', error.message);
-        throw error;
-      }
-    }
-  }
+			console.log("Successfully updated FUNDING.yml");
+		} catch (error: any) {
+			if (error.status === 404) {
+				// Create new file if it doesn't exist
+				await this.octokit.repos.createOrUpdateFileContents({
+					owner,
+					repo,
+					path,
+					message: "Create FUNDING.yml",
+					content,
+				});
+
+				console.log("Successfully created FUNDING.yml");
+			} else {
+				console.error("Error updating FUNDING.yml:", error.message);
+				throw error;
+			}
+		}
+	}
 }

@@ -22,9 +22,9 @@
  * @author Gemini
  */
 
-import { execSync } from 'node:child_process';
-import type { Browser, Page } from 'playwright';
-import { chromium } from 'playwright';
+import { execSync } from "node:child_process";
+import type { Browser, Page } from "playwright";
+import { chromium } from "playwright";
 
 // The script that will be injected into the page to handle iframes.
 // This is the same logic from the previous script, prepared for injection.
@@ -96,40 +96,45 @@ const iframeBusterScript = `
  * The main function to run the Playwright automation.
  */
 (async () => {
-    console.log('🚀 Launching browser...');
-    // Ensure Chromium is installed for Playwright
-    try {
-        // Try to launch Chromium with Playwright's CLI to check if it's installed
-        execSync('npx playwright install chromium', { stdio: 'ignore' });
-    } catch (e) {
-        console.error('Failed to install Chromium for Playwright. Please check your setup.');
-        process.exit(1);
-    }
-    // Launch the browser. `headless: false` means we'll see the browser window.
-    const browser: Browser = await chromium.launch({ headless: false });
-    const context = await browser.newContext();
-    const page: Page = await context.newPage();
+	console.log("🚀 Launching browser...");
+	// Ensure Chromium is installed for Playwright
+	try {
+		// Try to launch Chromium with Playwright's CLI to check if it's installed
+		execSync("npx playwright install chromium", { stdio: "ignore" });
+	} catch (e) {
+		console.error(
+			"Failed to install Chromium for Playwright. Please check your setup.",
+		);
+		process.exit(1);
+	}
+	// Launch the browser. `headless: false` means we'll see the browser window.
+	const browser: Browser = await chromium.launch({ headless: false });
+	const context = await browser.newContext();
+	const page: Page = await context.newPage();
 
-    // Inject the iframe buster script.
-    // This runs the script before any other scripts on the page, ensuring it catches everything.
-    await page.addInitScript(iframeBusterScript);
-    console.log('✅ Iframe buster script injected.');
+	// Inject the iframe buster script.
+	// This runs the script before any other scripts on the page, ensuring it catches everything.
+	await page.addInitScript(iframeBusterScript);
+	console.log("✅ Iframe buster script injected.");
 
-    const [targetUrl] = Bun.argv.splice(2) as  [string, ...string[]];
+	const [targetUrl] = Bun.argv.splice(2) as [string, ...string[]];
 
-    try {
-        console.log(`Navigating to: ${targetUrl}`);
-        // Navigate to the target URL.
-        await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
-        console.log('✅ Page loaded successfully.');
-        console.log('ℹ️ The browser will remain open. You can now interact with the page.');
-        console.log('Press Ctrl+C in the terminal or close the browser window to exit.');
+	try {
+		console.log(`Navigating to: ${targetUrl}`);
+		// Navigate to the target URL.
+		await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+		console.log("✅ Page loaded successfully.");
+		console.log(
+			"ℹ️ The browser will remain open. You can now interact with the page.",
+		);
+		console.log(
+			"Press Ctrl+C in the terminal or close the browser window to exit.",
+		);
+	} catch (error) {
+		console.error("❌ An error occurred during navigation:", error);
+		// Close the browser if an error occurs.
+		await browser.close();
+	}
 
-    } catch (error) {
-        console.error('❌ An error occurred during navigation:', error);
-        // Close the browser if an error occurs.
-        await browser.close();
-    }
-
-    // We don't call browser.close() here, so the window stays open for you to use.
+	// We don't call browser.close() here, so the window stays open for you to use.
 })();

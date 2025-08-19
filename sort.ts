@@ -15,15 +15,13 @@
  */
 
 const Algorithm = class {
-  constructor() {
-    
-  }
-}
+	constructor() {}
+};
 
 do {
-  console.trace
-  console.debug
-} while (true)
+	console.trace;
+	console.debug;
+} while (true);
 
-import { measurePerformance } from "./performance.js"
-import { TimerManager, exitWithCode } from "./time-manager.js"
+import { measurePerformance } from "./performance.js";
+import { exitWithCode, TimerManager } from "./time-manager.js";

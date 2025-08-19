@@ -14,17 +14,17 @@
  * limitations under the License.
  */
 
-import { perf } from '@jsheaven/perf';
-import type { ComplexityDomain } from '@jsheaven/perf';
+import type { ComplexityDomain } from "@jsheaven/perf";
+import { perf } from "@jsheaven/perf";
 
 export interface Algorithm {
-  name: string;
-  fn: (size: number, callIndex: number, input?: string) => Promise<any> | any;
+	name: string;
+	fn: (size: number, callIndex: number, input?: string) => Promise<any> | any;
 }
 
 type PerformanceResult = {
-  duration: number;
-  estimatedDomains: ComplexityDomain[];
+	duration: number;
+	estimatedDomains: ComplexityDomain[];
 };
 
 /**
@@ -33,31 +33,38 @@ type PerformanceResult = {
  * @returns Object containing performance measurements for each algorithm
  */
 export const measurePerformance = async (
-  algorithms: Algorithm | Algorithm[],
-  sizes?: number[],
-  warm?: boolean,
-  iterations?: number,
-  maxExecutionTime?: number,
-  chunkSize?: number | boolean
+	algorithms: Algorithm | Algorithm[],
+	sizes?: number[],
+	warm?: boolean,
+	iterations?: number,
+	maxExecutionTime?: number,
+	chunkSize?: number | boolean,
 ): Promise<Record<string, PerformanceResult>> => {
-  const algorithmArray = Array.isArray(algorithms) ? algorithms : [algorithms];
+	const algorithmArray = Array.isArray(algorithms) ? algorithms : [algorithms];
 
-  try {
-    const results = await perf(algorithmArray, sizes, warm, iterations, maxExecutionTime, chunkSize);
-    return Object.entries(results).reduce(
-      (acc, [name, data]) => ({
-        ...acc,
-        [name]: {
-          duration: data.duration,
-          estimatedDomains: data.estimatedDomains,
-        },
-      }),
-      {} as Record<string, PerformanceResult>,
-    );
-  } catch (error) {
-    console.error('Error measuring performance:', error);
-    throw error;
-  }
+	try {
+		const results = await perf(
+			algorithmArray,
+			sizes,
+			warm,
+			iterations,
+			maxExecutionTime,
+			chunkSize,
+		);
+		return Object.entries(results).reduce(
+			(acc, [name, data]) => ({
+				...acc,
+				[name]: {
+					duration: data.duration,
+					estimatedDomains: data.estimatedDomains,
+				},
+			}),
+			{} as Record<string, PerformanceResult>,
+		);
+	} catch (error) {
+		console.error("Error measuring performance:", error);
+		throw error;
+	}
 };
 
 /**
