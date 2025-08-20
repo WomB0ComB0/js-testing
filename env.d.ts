@@ -49,6 +49,7 @@ declare global {
 			GOOGLE_YOUTUBE_API_KEY: string;
 			GOOGLE_SEARCH_API_KEY: string;
 			GOOGLE_SEARCH_ENGINE_ID: string;
+			SERP_API_KEY: string;
 		}
 	}
 }

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-// bun add @google-cloud/vision
 import vision from "@google-cloud/vision";
 import fs from "node:fs/promises";
 import { type } from "arktype";
