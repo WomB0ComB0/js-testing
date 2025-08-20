@@ -139,7 +139,7 @@ const timingMiddleware = new Elysia()
  * The secret used for signing and verifying JWT tokens.
  * @type {string}
  */
-const JWT_SECRET: string = process.env.JWT_SECRET || "dev_secret";
+const JWT_SECRET: string = Bun.env.JWT_SECRET || "dev_secret";
 
 /**
  * Authentication route for registering a new user.
@@ -255,7 +255,7 @@ const utilityRoute = new Elysia()
 							external: `${(memoryUsage.external / 1_024 / 1_024).toFixed(2)} MB`,
 						},
 						version: appVersion,
-						environment: process.env.NODE_ENV || "development",
+						environment: Bun.env.NODE_ENV || "development",
 					},
 				});
 			}),

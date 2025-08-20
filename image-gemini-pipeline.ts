@@ -14,77 +14,60 @@
  * limitations under the License.
  */
 
+/**
+ * Enhanced ImageContextExtractor with improved image identification accuracy
+ */
+
+import { GoogleGenAI, Type } from "@google/genai";
+import { type } from "arktype";
+import { Error } from "effect/Data";
 import fs from "node:fs";
-import { GoogleGenAI } from "@google/genai";
 import { v4 as uuidv4 } from "uuid";
 
-type ImageAnalysisResult = {
-	uuid: string;
-	rawAnalysis: string | undefined;
-	timestamp: string;
-	processingStatus: "completed" | "failed";
-};
+const DetailedImageAnalysis = type({
+	uuid: "string.uuid.v4",
+	primaryObjects: ["string", "[]"],
+	textContent: ["string", "[]"],
+	brandIdentification: {
+		brands: ["string", "[]"],
+		confidence: "number",
+		brandElements: ["string", "[]"]
+	},
+	technicalDetails: {
+		imageQuality: "'high' | 'medium' | 'low'",
+		lighting: "'good' | 'poor' | 'mixed'",
+		angle: "'front' | 'side' | 'angled' | 'top' | 'bottom'",
+		clarity: "number",
+		partialOcclusion: "boolean"
+	},
+	contextualInfo: {
+		setting: "string",
+		backgroundElements: ["string", "[]"],
+		associatedProducts: ["string", "[]"]
+	},
+	rawAnalysis: "string|undefined",
+	timestamp: "string",
+	processingStatus: "'completed' | 'failed'",
+});
 
-type InitialResults = {
-	uuid: string;
-	parentUuid: string;
-	results: any;
-	timestamp: string;
-	processingStatus: "completed" | "failed";
-};
+type DetailedImageAnalysis = typeof DetailedImageAnalysis.infer;
 
-type MetadataResults = {
-	uuid: string;
-	parentUuid: string;
-	imageUuid: string;
-	metadata: any;
-	foreignKeys: ForeignKeys;
-	timestamp: string;
-	processingStatus: "completed" | "failed";
-};
-
-type ForeignKeys = {
-	productId: string;
-	categoryId: string;
-	brandId: string;
-	locationId: string;
-};
-
-type PipelineSummary = {
-	uuid: string;
-	categories: string[];
-	confidence: number;
-	processingTime: string;
-};
-
-type PipelineResult = {
-	pipeline: {
-		imageAnalysis: ImageAnalysisResult;
-		initialResults: InitialResults;
-		metadata: MetadataResults;
-	};
-	summary: PipelineSummary;
-};
-
-class ImageContextExtractor {
+class EnhancedImageContextExtractor {
 	private ai: GoogleGenAI;
 	private model: string;
 
 	constructor(apiKey: string) {
 		this.ai = new GoogleGenAI({
-			apiKey: apiKey || process.env.GEMINI_API_KEY!,
+			apiKey: apiKey || Bun.env.GEMINI_API_KEY,
 		});
 		this.model = "gemini-2.0-flash-exp";
 	}
 
 	/**
-	 * Process image similar to Google Lens - identify objects, text, and context
-	 * @param imagePath - Path to image file or image buffer
-	 * @returns Initial processing results
+	 * Multi-stage image analysis for maximum accuracy
 	 */
-	async processImage(imagePath: string | Buffer): Promise<ImageAnalysisResult> {
+	async processImageDetailed(imagePath: string | Buffer): Promise<DetailedImageAnalysis> {
 		try {
-			// Convert image to base64 if it's a file path
 			let imageData: string;
 			if (typeof imagePath === "string") {
 				const imageBuffer = fs.readFileSync(imagePath);
@@ -93,24 +76,63 @@ class ImageContextExtractor {
 				imageData = imagePath.toString("base64");
 			}
 
-			const response: any = await this.ai.models.generateContent({
+			// Stage 1: Comprehensive object and brand identification
+			const response = await this.ai.models.generateContent({
 				model: this.model,
 				contents: [
 					{
 						parts: [
 							{
-								text: `Analyze this image like Google Lens would. Identify:
-              1. All visible products, brands, and text
-              2. Product categories (food, clothing, technology, drugs/medicine, etc.)
-              3. Any readable text, labels, or signs
-              4. Visual context and setting
-              5. Potential shopping/commercial elements
-              
-              Format your response as structured data that can be easily parsed.`,
+								text: `
+									Perform extremely detailed image analysis for product identification. Be as specific and accurate as possible:
+
+									IDENTIFICATION REQUIREMENTS:
+									1. PRIMARY OBJECTS: List every distinct product, item, or object you can identify
+									- Include specific product names, models, variations
+									- Note packaging details, sizes, flavors, versions
+									- Identify any product codes, SKUs, or model numbers
+
+									2. TEXT EXTRACTION: Extract ALL visible text including:
+									- Product names and descriptions
+									- Brand names and logos
+									- Prices, weights, sizes, quantities
+									- Ingredients, nutritional info, specifications
+									- Barcodes, QR codes, product codes
+									- Any fine print or small text
+									- Website URLs, social media handles
+
+									3. BRAND ANALYSIS: Identify brands through:
+									- Logos and brand marks
+									- Typography and font styles
+									- Color schemes and brand colors
+									- Packaging design patterns
+									- Corporate visual identity elements
+
+									4. TECHNICAL ASSESSMENT: Evaluate:
+									- Image quality and resolution
+									- Lighting conditions
+									- Viewing angle and perspective
+									- Focus and clarity levels
+									- Any obstructions or partial views
+
+									5. CONTEXTUAL INFORMATION: Describe:
+									- Physical location/setting (store shelf, kitchen, etc.)
+									- Other products or items visible
+									- Environmental context
+									- Display or arrangement style
+
+									ACCURACY FOCUS:
+									- If uncertain about a product, state confidence level
+									- Distinguish between similar products carefully
+									- Note any ambiguous elements that need clarification
+									- Provide alternative interpretations if multiple are possible
+
+									Format as structured data for parsing.
+								`,
 							},
 							{
 								inlineData: {
-									mimeType: "image/jpeg", // Adjust based on actual image type
+									mimeType: this.detectMimeType(imagePath),
 									data: imageData,
 								},
 							},
@@ -118,281 +140,260 @@ class ImageContextExtractor {
 					},
 				],
 				config: {
-					systemInstruction: `You are an expert image analysis system similar to Google Lens. 
-          Focus on identifying products, brands, text, and commercial elements in images. 
-          Provide structured, actionable data for product categorization and information retrieval.`,
-					maxOutputTokens: 4096,
+					systemInstruction: {
+						parts: [
+							{
+								text: `
+									You are an expert computer vision system optimized for product identification accuracy. 
+									Your goal is to identify products with the precision of a professional inventory scanner combined 
+									with the contextual understanding of a retail expert. Focus on:
+									1. Exact product identification over general categories
+									2. Brand recognition accuracy
+									3. Text extraction completeness
+									4. Context that aids in disambiguation
+									5. Technical factors that affect identification confidence
+								`
+							}
+						]
+					},
+					maxOutputTokens: 8192,
+					temperature: 0.1,
 				},
 			});
 
-			const analysisText: string | undefined =
-				response.candidates?.[0]?.content?.parts?.[0]?.text;
+			const analysisText = response.candidates?.[0]?.content?.parts?.[0]?.text;
 
-			return {
+			// Stage 2: Structure the analysis using a follow-up call
+			const structuredResponse = await this.ai.models.generateContent({
+				model: this.model,
+				contents: [
+					{
+						parts: [
+							{
+								text: `
+									Convert this image analysis into structured JSON format:
+
+									${analysisText}
+
+									Return ONLY JSON with this exact structure:
+									{
+										"primaryObjects": ["specific product names"],
+										"textContent": ["all extracted text"],
+										"brandIdentification": {
+											"brands": ["identified brands"],
+											"confidence": 0.0-1.0,
+											"brandElements": ["logos, colors, typography elements"]
+										},
+										"technicalDetails": {
+											"imageQuality": "high|medium|low",
+											"lighting": "good|poor|mixed", 
+											"angle": "front|side|angled|top|bottom",
+											"clarity": 0.0-1.0,
+											"partialOcclusion": true|false
+										},
+										"contextualInfo": {
+											"setting": "description of location/setting",
+											"backgroundElements": ["other visible items"],
+											"associatedProducts": ["related products visible"]
+										}
+									}
+								`
+							},
+						],
+					},
+				],
+				config: {
+					systemInstruction: {
+						parts: [{ text: "Convert analysis to structured JSON. Be precise with product names and brand identification." }]
+					},
+					responseMimeType: "application/json",
+					responseSchema: {
+						type: Type.OBJECT,
+						properties: {
+							primaryObjects: { type: Type.ARRAY, items: { type: Type.STRING } },
+							textContent: { type: Type.ARRAY, items: { type: Type.STRING } },
+							brandIdentification: {
+								type: Type.OBJECT,
+								properties: {
+									brands: { type: Type.ARRAY, items: { type: Type.STRING } },
+									confidence: { type: Type.NUMBER },
+									brandElements: { type: Type.ARRAY, items: { type: Type.STRING } }
+								},
+								required: ["brands", "confidence", "brandElements"]
+							},
+							technicalDetails: {
+								type: Type.OBJECT,
+								properties: {
+									imageQuality: { type: Type.STRING },
+									lighting: { type: Type.STRING },
+									angle: { type: Type.STRING },
+									clarity: { type: Type.NUMBER },
+									partialOcclusion: { type: Type.BOOLEAN }
+								},
+								required: ["imageQuality", "lighting", "angle", "clarity", "partialOcclusion"]
+							},
+							contextualInfo: {
+								type: Type.OBJECT,
+								properties: {
+									setting: { type: Type.STRING },
+									backgroundElements: { type: Type.ARRAY, items: { type: Type.STRING } },
+									associatedProducts: { type: Type.ARRAY, items: { type: Type.STRING } }
+								},
+								required: ["setting", "backgroundElements", "associatedProducts"]
+							}
+						},
+						required: ["primaryObjects", "textContent", "brandIdentification", "technicalDetails", "contextualInfo"]
+					},
+					temperature: 0.0, // Maximum consistency for structured output
+				},
+			});
+
+			const structuredData = JSON.parse(structuredResponse.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}");
+
+			const resultObject = {
 				uuid: uuidv4(),
+				...structuredData,
 				rawAnalysis: analysisText,
 				timestamp: new Date().toISOString(),
-				processingStatus: "completed",
+				processingStatus: "completed" as const,
 			};
-		} catch (error: unknown) {
-			if (error instanceof Error) {
-				console.error("Error processing image:", error);
-				throw new Error(`Image processing failed: ${error.message}`);
-			} else {
-				console.error("Error processing image:", error);
-				throw new Error("Image processing failed: Unknown error");
-			}
+
+			return DetailedImageAnalysis.assert(resultObject);
+
+		} catch (error) {
+			console.error("Enhanced image processing failed:", error);
+			throw new Error(`Enhanced image processing failed: ${error}`);
 		}
 	}
 
 	/**
-	 * Generate initial top results based on image analysis
-	 * @param imageAnalysis - Results from processImage
-	 * @returns Top search results and suggestions
+	 * Cross-reference and validate identified products
 	 */
-	async generateInitialResults(
-		imageAnalysis: ImageAnalysisResult,
-	): Promise<InitialResults> {
+	async validateIdentification(analysis: DetailedImageAnalysis): Promise<DetailedImageAnalysis & { validationScore: number }> {
 		try {
-			const response: any = await this.ai.models.generateContent({
+			const response = await this.ai.models.generateContent({
 				model: this.model,
 				contents: [
 					{
 						parts: [
 							{
-								text: `Based on this image analysis, generate the top 5-10 most relevant search results and product matches:
-            
-            Analysis: ${imageAnalysis.rawAnalysis}
-            
-            Provide:
-            1. Top product matches with confidence scores
-            2. Suggested search queries
-            3. Relevant categories
-            4. Key identifying features
-            5. Potential brand matches
-            
-            Format as JSON with clear structure for downstream processing.`,
+								text: `
+									Validate and cross-reference these product identifications for accuracy:
+
+									PRIMARY OBJECTS: ${JSON.stringify(analysis.primaryObjects)}
+									BRANDS: ${JSON.stringify(analysis.brandIdentification.brands)}
+									TEXT CONTENT: ${JSON.stringify(analysis.textContent)}
+
+									VALIDATION TASKS:
+									1. Check for consistency between identified products and extracted text
+									2. Verify brand-product relationships make sense
+									3. Identify any conflicting or contradictory identifications
+									4. Flag uncertain identifications that need verification
+									5. Suggest corrections for likely misidentifications
+
+									Return JSON with:
+									{
+										"validationScore": 0.0-1.0,
+										"consistencyChecks": {
+											"productTextAlignment": true|false,
+											"brandProductMatch": true|false,
+											"contextualConsistency": true|false
+										},
+										"corrections": [{"original": "...", "suggested": "...", "reason": "..."}],
+										"uncertainElements": ["list of uncertain identifications"],
+										"confidenceByProduct": [{"product": "...", "confidence": 0.0-1.0}]
+									}
+								`
 							},
 						],
 					},
 				],
 				config: {
-					systemInstruction: `Generate structured search results and product matches based on image analysis. 
-          Focus on actionable results that can be used for product categorization and information retrieval.
-          Prioritize accuracy and relevance.`,
+					responseMimeType: "application/json",
 					maxOutputTokens: 4096,
 				},
 			});
 
-			const resultsText: string | undefined =
-				response.candidates?.[0]?.content?.parts?.[0]?.text;
+			const validationData = JSON.parse(response.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}");
 
 			return {
-				uuid: uuidv4(),
-				parentUuid: imageAnalysis.uuid,
-				results: this.parseResults(resultsText),
-				timestamp: new Date().toISOString(),
-				processingStatus: "completed",
+				...analysis,
+				validationScore: validationData.validationScore || 0.5,
 			};
-		} catch (error: unknown) {
-			if (error instanceof Error) {
-				console.error("Error generating initial results:", error);
-				throw new Error(`Results generation failed: ${error.message}`);
-			} else {
-				console.error("Error generating initial results:", error);
-				throw new Error("Results generation failed: Unknown error");
-			}
+
+		} catch (error) {
+			console.error("Validation failed:", error);
+			return { ...analysis, validationScore: 0.5 };
 		}
 	}
 
 	/**
-	 * Extract structured metadata from results
-	 * @param initialResults - Results from generateInitialResults
-	 * @returns Extracted and structured metadata
+	 * Enhanced pipeline with detailed identification
 	 */
-	async extractMetadata(
-		initialResults: InitialResults,
-	): Promise<MetadataResults> {
-		try {
-			const response: any = await this.ai.models.generateContent({
-				model: this.model,
-				contents: [
-					{
-						parts: [
-							{
-								text: `Extract structured metadata from these search results for database storage and categorization:
-            
-            Results: ${JSON.stringify(initialResults.results, null, 2)}
-            
-            Extract:
-            1. Product categories (food, clothes, drugs, technology, etc.)
-            2. Brand information and confidence levels
-            3. Key attributes and features
-            4. Price-related information if available
-            5. Location-relevant data
-            6. Nutritional info (for food)
-            7. Technical specifications (for technology)
-            8. Foreign key relationships for database storage
-            
-            Format as structured JSON with clear field mappings.`,
-							},
-						],
-					},
-				],
-				config: {
-					systemInstruction: `Extract and structure metadata for database storage and product categorization.
-          Focus on creating clean, normalized data with proper foreign key relationships.
-          Ensure all extracted data is actionable for the downstream pipeline.`,
-					maxOutputTokens: 4096,
-				},
-			});
+	async processImagePipelineEnhanced(imagePath: string | Buffer) {
+		console.log("🔍 Starting enhanced image identification...");
 
-			const metadataText: string | undefined =
-				response.candidates?.[0]?.content?.parts?.[0]?.text;
+		const detailedAnalysis = await this.processImageDetailed(imagePath);
 
-			return {
-				uuid: uuidv4(),
-				parentUuid: initialResults.uuid,
-				imageUuid: initialResults.parentUuid,
-				metadata: this.parseMetadata(metadataText),
-				foreignKeys: this.generateForeignKeys(metadataText),
-				timestamp: new Date().toISOString(),
-				processingStatus: "completed",
-			};
-		} catch (error: unknown) {
-			if (error instanceof Error) {
-				console.error("Error extracting metadata:", error);
-				throw new Error(`Metadata extraction failed: ${error.message}`);
-			} else {
-				console.error("Error extracting metadata:", error);
-				throw new Error("Metadata extraction failed: Unknown error");
-			}
-		}
+		const validatedAnalysis = await this.validateIdentification(detailedAnalysis);
+
+		console.log("✅ Enhanced identification completed");
+		console.log(`📊 Validation Score: ${validatedAnalysis.validationScore}`);
+		console.log(`🎯 Primary Objects: ${validatedAnalysis.primaryObjects.join(", ")}`);
+		console.log(`🏷️ Brands: ${validatedAnalysis.brandIdentification.brands.join(", ")}`);
+
+		return validatedAnalysis;
 	}
 
-	/**
-	 * Complete pipeline from image to metadata
-	 * @param imagePath - Path to image or image buffer
-	 * @returns Complete processing results
-	 */
-	async processImagePipeline(
-		imagePath: string | Buffer,
-	): Promise<PipelineResult> {
-		try {
-			console.log("🔄 Processing image...");
-			const imageAnalysis = await this.processImage(imagePath);
-
-			console.log("🔄 Generating initial results...");
-			const initialResults = await this.generateInitialResults(imageAnalysis);
-
-			console.log("🔄 Extracting metadata...");
-			const metadata = await this.extractMetadata(initialResults);
-
-			return {
-				pipeline: {
-					imageAnalysis,
-					initialResults,
-					metadata,
-				},
-				summary: {
-					uuid: imageAnalysis.uuid,
-					categories: Array.isArray(metadata.metadata?.categories)
-						? metadata.metadata.categories
-						: [],
-					confidence:
-						typeof metadata.metadata?.confidence === "number"
-							? metadata.metadata.confidence
-							: 0,
-					processingTime: new Date().toISOString(),
-				},
-			};
-		} catch (error: unknown) {
-			if (error instanceof Error) {
-				console.error("Pipeline processing failed:", error);
-				throw error;
-			} else {
-				console.error("Pipeline processing failed:", error);
-				throw new Error("Pipeline processing failed: Unknown error");
+	private detectMimeType(imagePath: string | Buffer): string {
+		if (typeof imagePath === "string") {
+			const ext = imagePath.toLowerCase().split('.').pop();
+			switch (ext) {
+				case 'png': return 'image/png';
+				case 'gif': return 'image/gif';
+				case 'webp': return 'image/webp';
+				default: return 'image/jpeg';
 			}
 		}
-	}
-
-	// Helper methods
-	parseResults(resultsText: string | undefined): any {
-		if (!resultsText) return { raw: "" };
-		try {
-			// Try to extract JSON from the response
-			const jsonMatch = resultsText.match(/\{[\s\S]*\}/);
-			if (jsonMatch) {
-				return JSON.parse(jsonMatch[0]);
-			}
-			// Fallback to structured text parsing
-			return { raw: resultsText };
-		} catch (error) {
-			return { raw: resultsText };
-		}
-	}
-
-	parseMetadata(metadataText: string | undefined): any {
-		if (!metadataText) return { raw: "" };
-		try {
-			const jsonMatch = metadataText.match(/\{[\s\S]*\}/);
-			if (jsonMatch) {
-				return JSON.parse(jsonMatch[0]);
-			}
-			return { raw: metadataText };
-		} catch (error) {
-			return { raw: metadataText };
-		}
-	}
-
-	generateForeignKeys(_metadataText: string | undefined): ForeignKeys {
-		// Generate foreign key relationships based on extracted data
-		const foreignKeys: ForeignKeys = {
-			productId: uuidv4(),
-			categoryId: uuidv4(),
-			brandId: uuidv4(),
-			locationId: uuidv4(),
-		};
-
-		return foreignKeys;
+		return 'image/jpeg';
 	}
 }
 
-// Usage example
-if (require.main === module) {
+
+if (typeof require !== "undefined" && require.main === module) {
 	(async () => {
 		try {
-			// For demonstration, allow API key override via env or argument
-			const apiKey = process.env.GEMINI_API_KEY || "";
-			const extractor = new ImageContextExtractor(apiKey);
+			const apiKey = Bun?.env?.GEMINI_API_KEY ?? process.env.GEMINI_API_KEY;
+			if (!apiKey) {
+				console.error("❌ Missing GEMINI_API_KEY in environment.");
+				process.exit(1);
+			}
 
-			// Example usage - replace with actual image path
+			const extractor = new EnhancedImageContextExtractor(apiKey);
 			const imagePath = "./test_image.jpg";
 
 			if (!fs.existsSync(imagePath)) {
-				console.log(
-					"⚠️  Sample image not found. Please provide a valid image path.",
-				);
-				console.log("Usage example:");
-				console.log(
-					'const result = await extractor.processImagePipeline("./your-image.jpg");',
-				);
-				return;
+				console.log("⚠️  Sample image not found at", imagePath);
+				process.exit(0);
 			}
 
-			const result = await extractor.processImagePipeline(imagePath);
+			const result = await extractor.processImagePipelineEnhanced(imagePath);
 
 			console.log("✅ Pipeline completed successfully!");
-			console.log("📊 Summary:", JSON.stringify(result.summary, null, 2));
-		} catch (error: unknown) {
-			if (error instanceof Error) {
-				console.error("❌ Pipeline failed:", error.message);
-			} else {
-				console.error("❌ Pipeline failed:", error);
-			}
+		
+			console.log("📌 UUID:", result.uuid);
+			console.log("📊 Validation Score:", result.validationScore);
+			console.log("🎯 Primary Objects:", result.primaryObjects.join(", "));
+			console.log("🏷️ Brands:", result.brandIdentification.brands.join(", "));
+			console.log("🕒 Timestamp:", result.timestamp);
+			console.log("🔧 Status:", result.processingStatus);
+		} catch (err) {
+			const message =
+				err instanceof globalThis.Error ? err.message : String(err);
+			console.error("❌ Pipeline failed:", message);
+			process.exit(1);
 		}
 	})();
 }
 
-export default ImageContextExtractor;
+export default EnhancedImageContextExtractor;
