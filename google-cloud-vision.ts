@@ -45,5 +45,4 @@ export async function reverseImageSearch(filePath: string): Promise<WebDetection
   return data;
 }
 
-
-(async () => console.log(await reverseImageSearch('./test_image.jpg')))()
+// (async () => console.log(await reverseImageSearch('./test_image.jpg')))()

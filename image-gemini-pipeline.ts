@@ -17,6 +17,7 @@
 /**
  * Enhanced ImageContextExtractor with improved image identification accuracy
  */
+// NOTE: This file constrains model output via responseSchema enums and normalizes synonyms pre-assert.
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { type } from "arktype";
@@ -51,6 +52,59 @@ const DetailedImageAnalysis = type({
 });
 
 type DetailedImageAnalysis = typeof DetailedImageAnalysis.infer;
+
+// ---------- Normalization helpers ----------
+// Canonicalize any off-spec strings coming from the model to our ArkType unions
+function normalizeTechnicalDetails<T extends Record<string, any>>(data: T): T {
+	const lower = (s: unknown) => String(s ?? "").trim().toLowerCase();
+
+	const choose = (
+		val: string,
+		allowed: readonly string[],
+		synonyms: Record<string, readonly string[]>
+	) => {
+		const v = lower(val);
+		if (allowed.includes(v)) return v;
+		for (const canon of Object.keys(synonyms)) {
+			if (synonyms[canon].some((x) => x === v)) return canon;
+		}
+		// Fallback to first allowed (stable default) if nothing matched
+		return allowed[0];
+	};
+
+	const angleAllowed = ["front", "side", "angled", "top", "bottom"] as const;
+	const angleSyn: Record<string, readonly string[]> = {
+		front: ["frontal", "front-facing", "straight-on", "head-on"],
+		side: ["profile", "side-view", "from the side"],
+		angled: ["three-quarter", "3/4", "oblique", "diagonal", "at an angle"],
+		top: ["overhead", "top-down", "bird's-eye"],
+		bottom: ["low-angle", "from-below", "worm's-eye"]
+	};
+
+	const qualAllowed = ["high", "medium", "low"] as const;
+	const qualSyn: Record<string, readonly string[]> = {
+		high: ["sharp", "crisp", "clear"],
+		medium: ["moderate", "avg", "average", "okay"],
+		low: ["poor", "blurry", "noisy", "grainy", "low quality"]
+	};
+
+	const lightAllowed = ["good", "poor", "mixed"] as const;
+	const lightSyn: Record<string, readonly string[]> = {
+		good: ["bright", "well-lit", "even"],
+		mixed: ["uneven", "backlit", "harsh", "variable", "contrast"],
+		poor: ["dim", "low light", "slightly dim", "dark", "underexposed"]
+	};
+
+	const td = (data as any).technicalDetails ?? {};
+	(data as any).technicalDetails = {
+		...td,
+		angle: choose(td.angle, angleAllowed, angleSyn),
+		imageQuality: choose(td.imageQuality, qualAllowed, qualSyn),
+		lighting: choose(td.lighting, lightAllowed, lightSyn),
+	};
+
+	return data;
+}
 
 class EnhancedImageContextExtractor {
 	private ai: GoogleGenAI;
@@ -204,7 +258,14 @@ class EnhancedImageContextExtractor {
 				],
 				config: {
 					systemInstruction: {
-						parts: [{ text: "Convert analysis to structured JSON. Be precise with product names and brand identification." }]
+						parts: [{
+							text:
+`Convert the analysis to structured JSON that matches the schema EXACTLY.
+For technicalDetails, you MUST choose from these enums:
+- imageQuality: ["high","medium","low"]
+- lighting: ["good","poor","mixed"]
+- angle: ["front","side","angled","top","bottom"]`
+						}]
 					},
 					responseMimeType: "application/json",
 					responseSchema: {
@@ -224,9 +285,9 @@ class EnhancedImageContextExtractor {
 							technicalDetails: {
 								type: Type.OBJECT,
 								properties: {
-									imageQuality: { type: Type.STRING },
-									lighting: { type: Type.STRING },
-									angle: { type: Type.STRING },
+									imageQuality: { type: Type.STRING, enum: ["high","medium","low"] },
+									lighting: { type: Type.STRING, enum: ["good","poor","mixed"] },
+									angle: { type: Type.STRING, enum: ["front","side","angled","top","bottom"] },
 									clarity: { type: Type.NUMBER },
 									partialOcclusion: { type: Type.BOOLEAN }
 								},
@@ -250,13 +311,14 @@ class EnhancedImageContextExtractor {
 
 			const structuredData = JSON.parse(structuredResponse.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}");
 
-			const resultObject = {
+			// Normalize before ArkType assertion to avoid TraversalError on synonyms
+			const resultObject = normalizeTechnicalDetails({
 				uuid: uuidv4(),
 				...structuredData,
 				rawAnalysis: analysisText,
 				timestamp: new Date().toISOString(),
 				processingStatus: "completed" as const,
-			};
+			});
 
 			return DetailedImageAnalysis.assert(resultObject);
 

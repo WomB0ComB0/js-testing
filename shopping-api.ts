@@ -14,12 +14,10 @@
  * limitations under the License.
  */
 
-import { type as arktype } from "arktype";
-import { Effect, pipe } from "effect";
-import { get } from "./effect-fetch.js";
 import { FetchHttpClient } from "@effect/platform";
-
-// ---------------- Types & Schemas ----------------
+import { Effect, pipe } from "effect";
+import { type as arktype } from "arktype";
+import { get } from "./effect-fetch.js";
 
 export const PriceQuote = arktype({
   source: "'bestbuy'|'ebay'|'walmart'|'serpapi'|'merchant'",
@@ -50,7 +48,6 @@ export interface PricingProvider {
   fetchQuotes(input: PricingRequest): Promise<PriceQuote[]>;
 }
 
-// SerpAPI item (new layout tolerant: link can be missing; accept product_link; id may be number)
 const SerpApiShoppingResult = arktype({
   title: "string",
   "link?": "string",
@@ -62,12 +59,9 @@ const SerpApiShoppingResult = arktype({
   "source?": "string",
 });
 
-// Only validate what we use; allow the rest to float
 const SerpApiResponse = arktype({
   "shopping_results?": [SerpApiShoppingResult, "[]"],
 });
-
-// ---------------- Provider (Effect + FetchHttpClient) ----------------
 
 const SERP_BASE = "https://serpapi.com";
 
@@ -100,13 +94,12 @@ export const serpApiProvider: PricingProvider = {
 
     const quotes: PriceQuote[] = results
       .map((r) => {
-        // choose the best available URL
         const url =
           r.link ??
           r.product_link ??
           (r.product_id != null ? `https://www.google.com/shopping/product/${String(r.product_id)}` : undefined);
 
-        if (!url) return undefined; // skip items with no usable link
+        if (!url) return undefined;
 
         const numericPrice =
           r.extracted_price ??
@@ -129,7 +122,6 @@ export const serpApiProvider: PricingProvider = {
           seller: r.source,
         };
 
-        // throws if bad; otherwise returns the validated value
         return PriceQuote.assert(candidate);
       })
       .filter((q): q is PriceQuote => !!q)
@@ -138,8 +130,6 @@ export const serpApiProvider: PricingProvider = {
     return quotes;
   },
 };
-
-// ---------------- Test Harness ----------------
 
 async function _testSerpApi() {
   const req: PricingRequest = {
@@ -161,5 +151,4 @@ async function _testSerpApi() {
   }
 }
 
-// Uncomment to run directly:
 (async () => { console.log(await _testSerpApi().catch(console.error)); })();
