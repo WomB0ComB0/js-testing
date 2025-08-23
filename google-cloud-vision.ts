@@ -14,35 +14,54 @@
  * limitations under the License.
  */
 
-import vision from "@google-cloud/vision";
 import fs from "node:fs/promises";
+import vision from "@google-cloud/vision";
 import { type } from "arktype";
 
 const WebDetection = type({
-  webEntities: [{ description: "string|undefined", score: "number|undefined" }, "[]"],
-  fullMatchingImages: [{ url: "string" }, "[]"],
-  partialMatchingImages: [{ url: "string" }, "[]"],
-  pagesWithMatchingImages: [{ url: "string", pageTitle: "string|undefined" }, "[]"],
+	webEntities: [
+		{ description: "string|undefined", score: "number|undefined" },
+		"[]",
+	],
+	fullMatchingImages: [{ url: "string" }, "[]"],
+	partialMatchingImages: [{ url: "string" }, "[]"],
+	pagesWithMatchingImages: [
+		{ url: "string", pageTitle: "string|undefined" },
+		"[]",
+	],
 });
 type WebDetection = typeof WebDetection.infer;
 
-const client = new vision.ImageAnnotatorClient({ keyFilename: './credentials.json' }); // requires GOOGLE_APPLICATION_CREDENTIALS
+const client = new vision.ImageAnnotatorClient({
+	keyFilename: "./credentials.json",
+}); // requires GOOGLE_APPLICATION_CREDENTIALS
 
-export async function reverseImageSearch(filePath: string): Promise<WebDetection> {
-  const [res] = await client.webDetection({ image: { content: await fs.readFile(filePath) } });
-  const web = res.webDetection ?? {};
+export async function reverseImageSearch(
+	filePath: string,
+): Promise<WebDetection> {
+	const [res] = await client.webDetection({
+		image: { content: await fs.readFile(filePath) },
+	});
+	const web = res.webDetection ?? {};
 
-  const data = WebDetection.assert({
-    webEntities: (web.webEntities ?? []).map(e => ({ description: e.description, score: e.score })),
-    fullMatchingImages: (web.fullMatchingImages ?? []).map(i => ({ url: i.url ?? "" })),
-    partialMatchingImages: (web.partialMatchingImages ?? []).map(i => ({ url: i.url ?? "" })),
-    pagesWithMatchingImages: (web.pagesWithMatchingImages ?? []).map(p => ({
-      url: p.url ?? "",
-      pageTitle: p.pageTitle
-    })),
-  });
+	const data = WebDetection.assert({
+		webEntities: (web.webEntities ?? []).map((e) => ({
+			description: e.description,
+			score: e.score,
+		})),
+		fullMatchingImages: (web.fullMatchingImages ?? []).map((i) => ({
+			url: i.url ?? "",
+		})),
+		partialMatchingImages: (web.partialMatchingImages ?? []).map((i) => ({
+			url: i.url ?? "",
+		})),
+		pagesWithMatchingImages: (web.pagesWithMatchingImages ?? []).map((p) => ({
+			url: p.url ?? "",
+			pageTitle: p.pageTitle,
+		})),
+	});
 
-  return data;
+	return data;
 }
 
 // (async () => console.log(await reverseImageSearch('./test_image.jpg')))()

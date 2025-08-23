@@ -15,140 +15,152 @@
  */
 
 import { FetchHttpClient } from "@effect/platform";
+import { type } from "arktype";
 import { Effect, pipe } from "effect";
-import { type as arktype } from "arktype";
 import { get } from "./effect-fetch.js";
 
-export const PriceQuote = arktype({
-  source: "'bestbuy'|'ebay'|'walmart'|'serpapi'|'merchant'",
-  title: "string",
-  url: "string",
-  currency: "string",
-  price: "number",
-  listPrice: "number|undefined",
-  availability: "'in_stock'|'out_of_stock'|'limited'|'unknown'",
-  gtin: "string|undefined",
-  sku: "string|undefined",
-  seller: "string|undefined",
+export const PriceQuote = type({
+	source: "'bestbuy'|'ebay'|'walmart'|'serpapi'|'merchant'",
+	title: "string",
+	url: "string",
+	currency: "string",
+	price: "number",
+	listPrice: "number|undefined",
+	availability: "'in_stock'|'out_of_stock'|'limited'|'unknown'",
+	gtin: "string|undefined",
+	sku: "string|undefined",
+	seller: "string|undefined",
 });
 export type PriceQuote = typeof PriceQuote.infer;
 
-export const PricingRequest = arktype({
-  query: "string",
-  gtin: "string|undefined",
-  brand: "string|undefined",
-  category: "'Food'|'Clothes'|'Drugs'|'Technology'|'News'|'Other'",
-  country: "string",
-  zip: "string|undefined",
+export const PricingRequest = type({
+	query: "string",
+	gtin: "string|undefined",
+	brand: "string|undefined",
+	category: "'Food'|'Clothes'|'Drugs'|'Technology'|'News'|'Other'",
+	country: "string",
+	zip: "string|undefined",
 });
 export type PricingRequest = typeof PricingRequest.infer;
 
 export interface PricingProvider {
-  name: PriceQuote["source"];
-  fetchQuotes(input: PricingRequest): Promise<PriceQuote[]>;
+	name: PriceQuote["source"];
+	fetchQuotes(input: PricingRequest): Promise<PriceQuote[]>;
 }
 
-const SerpApiShoppingResult = arktype({
-  title: "string",
-  "link?": "string",
-  "product_link?": "string",
-  "extracted_price?": "number",
-  "price?": "string | number",
-  "extracted_old_price?": "number",
-  "product_id?": "string | number",
-  "source?": "string",
+const SerpApiShoppingResult = type({
+	title: "string",
+	"link?": "string",
+	"product_link?": "string",
+	"extracted_price?": "number",
+	"price?": "string | number",
+	"extracted_old_price?": "number",
+	"product_id?": "string | number",
+	"source?": "string",
 });
 
-const SerpApiResponse = arktype({
-  "shopping_results?": [SerpApiShoppingResult, "[]"],
+const SerpApiResponse = type({
+	"shopping_results?": [SerpApiShoppingResult, "[]"],
 });
 
 const SERP_BASE = "https://serpapi.com";
 
 export const serpApiProvider: PricingProvider = {
-  name: "serpapi",
-  async fetchQuotes(input) {
-    const effect = pipe(
-      get(
-        `${SERP_BASE}/search.json`,
-        {
-          schema: SerpApiResponse,
-          retries: 1,
-          retryDelay: 500,
-          timeout: 10_000,
-        },
-        {
-          engine: "google_shopping",
-          q: input.gtin ? input.gtin : input.query,
-          api_key: process.env.SERP_API_KEY!,
-          gl: (input.country || "US").toLowerCase(),
-          hl: "en",
-          // tip: you can also try `no_cache: "true"` when debugging results variance
-        }
-      ),
-      Effect.provide(FetchHttpClient.layer)
-    );
+	name: "serpapi",
+	async fetchQuotes(input) {
+		const effect = pipe(
+			get(
+				`${SERP_BASE}/search.json`,
+				{
+					schema: SerpApiResponse,
+					retries: 1,
+					retryDelay: 500,
+					timeout: 10_000,
+				},
+				{
+					engine: "google_shopping",
+					q: input.gtin ? input.gtin : input.query,
+					api_key: process.env.SERP_API_KEY!,
+					gl: (input.country || "US").toLowerCase(),
+					hl: "en",
+					// tip: you can also try `no_cache: "true"` when debugging results variance
+				},
+			),
+			Effect.provide(FetchHttpClient.layer),
+		);
 
-    const payload = await Effect.runPromise(effect);
-    const results = Array.isArray(payload.shopping_results) ? payload.shopping_results : [];
+		const payload = await Effect.runPromise(effect);
+		const results = Array.isArray(payload.shopping_results)
+			? payload.shopping_results
+			: [];
 
-    const quotes: PriceQuote[] = results
-      .map((r) => {
-        const url =
-          r.link ??
-          r.product_link ??
-          (r.product_id != null ? `https://www.google.com/shopping/product/${String(r.product_id)}` : undefined);
+		const quotes: PriceQuote[] = results
+			.map((r) => {
+				const url =
+					r.link ??
+					r.product_link ??
+					(r.product_id != null
+						? `https://www.google.com/shopping/product/${String(r.product_id)}`
+						: undefined);
 
-        if (!url) return undefined;
+				if (!url) return undefined;
 
-        const numericPrice =
-          r.extracted_price ??
-          (typeof r.price === "number"
-            ? r.price
-            : r.price
-            ? Number(String(r.price).replace(/[^0-9.]/g, ""))
-            : 0);
+				const numericPrice =
+					r.extracted_price ??
+					(typeof r.price === "number"
+						? r.price
+						: r.price
+							? Number(String(r.price).replace(/[^0-9.]/g, ""))
+							: 0);
 
-        const candidate = {
-          source: "serpapi" as const,
-          title: r.title,
-          url,
-          currency: "USD",
-          price: numericPrice,
-          listPrice: r.extracted_old_price,
-          availability: "unknown" as const,
-          gtin: undefined,
-          sku: r.product_id != null ? String(r.product_id) : undefined,
-          seller: r.source,
-        };
+				const candidate = {
+					source: "serpapi" as const,
+					title: r.title,
+					url,
+					currency: "USD",
+					price: numericPrice,
+					listPrice: r.extracted_old_price,
+					availability: "unknown" as const,
+					gtin: undefined,
+					sku: r.product_id != null ? String(r.product_id) : undefined,
+					seller: r.source,
+				};
 
-        return PriceQuote.assert(candidate);
-      })
-      .filter((q): q is PriceQuote => !!q)
-      .sort((a, b) => a.price - b.price);
+				return PriceQuote.assert(candidate);
+			})
+			.filter((q): q is PriceQuote => !!q)
+			.sort((a, b) => a.price - b.price);
 
-    return quotes;
-  },
+		return quotes;
+	},
 };
 
 async function _testSerpApi() {
-  const req: PricingRequest = {
-    query: "Touhou Cirno plush",
-    gtin: undefined,
-    brand: undefined,
-    category: "Clothes",
-    country: "US",
-    zip: undefined,
-  };
+	const req: PricingRequest = {
+		query: "Touhou Cirno plush",
+		gtin: undefined,
+		brand: undefined,
+		category: "Clothes",
+		country: "US",
+		zip: undefined,
+	};
 
-  try {
-    const quotes = await serpApiProvider.fetchQuotes(req);
-    console.log("[serpapi] got", quotes.length, "quotes");
-    if (quotes.length) console.table(quotes.slice(0, 5));
-    else console.log("No shopping_results returned. Try a broader query or check quota.");
-  } catch (err) {
-    console.error("SerpAPI error:", err instanceof Error ? err.message : String(err));
-  }
+	try {
+		const quotes = await serpApiProvider.fetchQuotes(req);
+		console.log("[serpapi] got", quotes.length, "quotes");
+		if (quotes.length) console.table(quotes.slice(0, 5));
+		else
+			console.log(
+				"No shopping_results returned. Try a broader query or check quota.",
+			);
+	} catch (err) {
+		console.error(
+			"SerpAPI error:",
+			Error.isError(err) ? err.message : String(err),
+		);
+	}
 }
 
-(async () => { console.log(await _testSerpApi().catch(console.error)); })();
+(async () => {
+	console.log(await _testSerpApi().catch(console.error));
+})();

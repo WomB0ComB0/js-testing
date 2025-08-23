@@ -19,10 +19,10 @@
  */
 // NOTE: This file constrains model output via responseSchema enums and normalizes synonyms pre-assert.
 
+import fs from "node:fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import { type } from "arktype";
 import { Error } from "effect/Data";
-import fs from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 
 const DetailedImageAnalysis = type({
@@ -32,19 +32,19 @@ const DetailedImageAnalysis = type({
 	brandIdentification: {
 		brands: ["string", "[]"],
 		confidence: "number",
-		brandElements: ["string", "[]"]
+		brandElements: ["string", "[]"],
 	},
 	technicalDetails: {
 		imageQuality: "'high' | 'medium' | 'low'",
 		lighting: "'good' | 'poor' | 'mixed'",
 		angle: "'front' | 'side' | 'angled' | 'top' | 'bottom'",
 		clarity: "number",
-		partialOcclusion: "boolean"
+		partialOcclusion: "boolean",
 	},
 	contextualInfo: {
 		setting: "string",
 		backgroundElements: ["string", "[]"],
-		associatedProducts: ["string", "[]"]
+		associatedProducts: ["string", "[]"],
 	},
 	rawAnalysis: "string|undefined",
 	timestamp: "string",
@@ -56,12 +56,15 @@ type DetailedImageAnalysis = typeof DetailedImageAnalysis.infer;
 // ---------- Normalization helpers ----------
 // Canonicalize any off-spec strings coming from the model to our ArkType unions
 function normalizeTechnicalDetails<T extends Record<string, any>>(data: T): T {
-	const lower = (s: unknown) => String(s ?? "").trim().toLowerCase();
+	const lower = (s: unknown) =>
+		String(s ?? "")
+			.trim()
+			.toLowerCase();
 
 	const choose = (
 		val: string,
 		allowed: readonly string[],
-		synonyms: Record<string, readonly string[]>
+		synonyms: Record<string, readonly string[]>,
 	) => {
 		const v = lower(val);
 		if (allowed.includes(v)) return v;
@@ -78,21 +81,21 @@ function normalizeTechnicalDetails<T extends Record<string, any>>(data: T): T {
 		side: ["profile", "side-view", "from the side"],
 		angled: ["three-quarter", "3/4", "oblique", "diagonal", "at an angle"],
 		top: ["overhead", "top-down", "bird's-eye"],
-		bottom: ["low-angle", "from-below", "worm's-eye"]
+		bottom: ["low-angle", "from-below", "worm's-eye"],
 	};
 
 	const qualAllowed = ["high", "medium", "low"] as const;
 	const qualSyn: Record<string, readonly string[]> = {
 		high: ["sharp", "crisp", "clear"],
 		medium: ["moderate", "avg", "average", "okay"],
-		low: ["poor", "blurry", "noisy", "grainy", "low quality"]
+		low: ["poor", "blurry", "noisy", "grainy", "low quality"],
 	};
 
 	const lightAllowed = ["good", "poor", "mixed"] as const;
 	const lightSyn: Record<string, readonly string[]> = {
 		good: ["bright", "well-lit", "even"],
 		mixed: ["uneven", "backlit", "harsh", "variable", "contrast"],
-		poor: ["dim", "low light", "slightly dim", "dark", "underexposed"]
+		poor: ["dim", "low light", "slightly dim", "dark", "underexposed"],
 	};
 
 	const td = (data as any).technicalDetails ?? {};
@@ -120,7 +123,9 @@ class EnhancedImageContextExtractor {
 	/**
 	 * Multi-stage image analysis for maximum accuracy
 	 */
-	async processImageDetailed(imagePath: string | Buffer): Promise<DetailedImageAnalysis> {
+	async processImageDetailed(
+		imagePath: string | Buffer,
+	): Promise<DetailedImageAnalysis> {
 		try {
 			let imageData: string;
 			if (typeof imagePath === "string") {
@@ -206,9 +211,9 @@ class EnhancedImageContextExtractor {
 									3. Text extraction completeness
 									4. Context that aids in disambiguation
 									5. Technical factors that affect identification confidence
-								`
-							}
-						]
+								`,
+							},
+						],
 					},
 					maxOutputTokens: 8192,
 					temperature: 0.1,
@@ -251,65 +256,105 @@ class EnhancedImageContextExtractor {
 											"associatedProducts": ["related products visible"]
 										}
 									}
-								`
+								`,
 							},
 						],
 					},
 				],
 				config: {
 					systemInstruction: {
-						parts: [{
-							text:
-`Convert the analysis to structured JSON that matches the schema EXACTLY.
+						parts: [
+							{
+								text: `Convert the analysis to structured JSON that matches the schema EXACTLY.
 For technicalDetails, you MUST choose from these enums:
 - imageQuality: ["high","medium","low"]
 - lighting: ["good","poor","mixed"]
-- angle: ["front","side","angled","top","bottom"]`
-						}]
+- angle: ["front","side","angled","top","bottom"]`,
+							},
+						],
 					},
 					responseMimeType: "application/json",
 					responseSchema: {
 						type: Type.OBJECT,
 						properties: {
-							primaryObjects: { type: Type.ARRAY, items: { type: Type.STRING } },
+							primaryObjects: {
+								type: Type.ARRAY,
+								items: { type: Type.STRING },
+							},
 							textContent: { type: Type.ARRAY, items: { type: Type.STRING } },
 							brandIdentification: {
 								type: Type.OBJECT,
 								properties: {
 									brands: { type: Type.ARRAY, items: { type: Type.STRING } },
 									confidence: { type: Type.NUMBER },
-									brandElements: { type: Type.ARRAY, items: { type: Type.STRING } }
+									brandElements: {
+										type: Type.ARRAY,
+										items: { type: Type.STRING },
+									},
 								},
-								required: ["brands", "confidence", "brandElements"]
+								required: ["brands", "confidence", "brandElements"],
 							},
 							technicalDetails: {
 								type: Type.OBJECT,
 								properties: {
-									imageQuality: { type: Type.STRING, enum: ["high","medium","low"] },
-									lighting: { type: Type.STRING, enum: ["good","poor","mixed"] },
-									angle: { type: Type.STRING, enum: ["front","side","angled","top","bottom"] },
+									imageQuality: {
+										type: Type.STRING,
+										enum: ["high", "medium", "low"],
+									},
+									lighting: {
+										type: Type.STRING,
+										enum: ["good", "poor", "mixed"],
+									},
+									angle: {
+										type: Type.STRING,
+										enum: ["front", "side", "angled", "top", "bottom"],
+									},
 									clarity: { type: Type.NUMBER },
-									partialOcclusion: { type: Type.BOOLEAN }
+									partialOcclusion: { type: Type.BOOLEAN },
 								},
-								required: ["imageQuality", "lighting", "angle", "clarity", "partialOcclusion"]
+								required: [
+									"imageQuality",
+									"lighting",
+									"angle",
+									"clarity",
+									"partialOcclusion",
+								],
 							},
 							contextualInfo: {
 								type: Type.OBJECT,
 								properties: {
 									setting: { type: Type.STRING },
-									backgroundElements: { type: Type.ARRAY, items: { type: Type.STRING } },
-									associatedProducts: { type: Type.ARRAY, items: { type: Type.STRING } }
+									backgroundElements: {
+										type: Type.ARRAY,
+										items: { type: Type.STRING },
+									},
+									associatedProducts: {
+										type: Type.ARRAY,
+										items: { type: Type.STRING },
+									},
 								},
-								required: ["setting", "backgroundElements", "associatedProducts"]
-							}
+								required: [
+									"setting",
+									"backgroundElements",
+									"associatedProducts",
+								],
+							},
 						},
-						required: ["primaryObjects", "textContent", "brandIdentification", "technicalDetails", "contextualInfo"]
+						required: [
+							"primaryObjects",
+							"textContent",
+							"brandIdentification",
+							"technicalDetails",
+							"contextualInfo",
+						],
 					},
 					temperature: 0.0, // Maximum consistency for structured output
 				},
 			});
 
-			const structuredData = JSON.parse(structuredResponse.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}");
+			const structuredData = JSON.parse(
+				structuredResponse.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}",
+			);
 
 			// Normalize before ArkType assertion to avoid TraversalError on synonyms
 			const resultObject = normalizeTechnicalDetails({
@@ -321,7 +366,6 @@ For technicalDetails, you MUST choose from these enums:
 			});
 
 			return DetailedImageAnalysis.assert(resultObject);
-
 		} catch (error) {
 			console.error("Enhanced image processing failed:", error);
 			throw new Error(`Enhanced image processing failed: ${error}`);
@@ -331,7 +375,9 @@ For technicalDetails, you MUST choose from these enums:
 	/**
 	 * Cross-reference and validate identified products
 	 */
-	async validateIdentification(analysis: DetailedImageAnalysis): Promise<DetailedImageAnalysis & { validationScore: number }> {
+	async validateIdentification(
+		analysis: DetailedImageAnalysis,
+	): Promise<DetailedImageAnalysis & { validationScore: number }> {
 		try {
 			const response = await this.ai.models.generateContent({
 				model: this.model,
@@ -365,7 +411,7 @@ For technicalDetails, you MUST choose from these enums:
 										"uncertainElements": ["list of uncertain identifications"],
 										"confidenceByProduct": [{"product": "...", "confidence": 0.0-1.0}]
 									}
-								`
+								`,
 							},
 						],
 					},
@@ -376,13 +422,14 @@ For technicalDetails, you MUST choose from these enums:
 				},
 			});
 
-			const validationData = JSON.parse(response.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}");
+			const validationData = JSON.parse(
+				response.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}",
+			);
 
 			return {
 				...analysis,
 				validationScore: validationData.validationScore || 0.5,
 			};
-
 		} catch (error) {
 			console.error("Validation failed:", error);
 			return { ...analysis, validationScore: 0.5 };
@@ -397,30 +444,38 @@ For technicalDetails, you MUST choose from these enums:
 
 		const detailedAnalysis = await this.processImageDetailed(imagePath);
 
-		const validatedAnalysis = await this.validateIdentification(detailedAnalysis);
+		const validatedAnalysis =
+			await this.validateIdentification(detailedAnalysis);
 
 		console.log("✅ Enhanced identification completed");
 		console.log(`📊 Validation Score: ${validatedAnalysis.validationScore}`);
-		console.log(`🎯 Primary Objects: ${validatedAnalysis.primaryObjects.join(", ")}`);
-		console.log(`🏷️ Brands: ${validatedAnalysis.brandIdentification.brands.join(", ")}`);
+		console.log(
+			`🎯 Primary Objects: ${validatedAnalysis.primaryObjects.join(", ")}`,
+		);
+		console.log(
+			`🏷️ Brands: ${validatedAnalysis.brandIdentification.brands.join(", ")}`,
+		);
 
 		return validatedAnalysis;
 	}
 
 	private detectMimeType(imagePath: string | Buffer): string {
 		if (typeof imagePath === "string") {
-			const ext = imagePath.toLowerCase().split('.').pop();
+			const ext = imagePath.toLowerCase().split(".").pop();
 			switch (ext) {
-				case 'png': return 'image/png';
-				case 'gif': return 'image/gif';
-				case 'webp': return 'image/webp';
-				default: return 'image/jpeg';
+				case "png":
+					return "image/png";
+				case "gif":
+					return "image/gif";
+				case "webp":
+					return "image/webp";
+				default:
+					return "image/jpeg";
 			}
 		}
-		return 'image/jpeg';
+		return "image/jpeg";
 	}
 }
-
 
 if (typeof require !== "undefined" && require.main === module) {
 	(async () => {
@@ -442,7 +497,7 @@ if (typeof require !== "undefined" && require.main === module) {
 			const result = await extractor.processImagePipelineEnhanced(imagePath);
 
 			console.log("✅ Pipeline completed successfully!");
-		
+
 			console.log("📌 UUID:", result.uuid);
 			console.log("📊 Validation Score:", result.validationScore);
 			console.log("🎯 Primary Objects:", result.primaryObjects.join(", "));

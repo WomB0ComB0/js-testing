@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Copyright 2025 Mike Odnis
  *
@@ -14,9 +15,46 @@
  * limitations under the License.
  */
 
-import * as fs from "fs";
-import * as path from "path";
-import * as readline from "readline";
+// -*- typescript -*-
+
+import { GoogleGenAI } from "@google/genai";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as readline from "node:readline";
+
+/**
+ * Interface for file data structure
+ */
+interface FileData {
+	content: string;
+	description: string;
+	size: number;
+	extension: string;
+}
+
+/**
+ * Interface for application configuration
+ */
+interface AppConfig {
+	model: string;
+	maxOutputTokens: number;
+	temperature: number;
+	maxConcurrency: number;
+	retryAttempts: number;
+	retryDelay: number;
+	maxFileSize: number;
+	supportedExtensions: Set<string>;
+	truncateContentAt: number;
+}
+
+/**
+ * Interface for GitHub API response
+ */
+interface GistResponse {
+	html_url: string;
+	id: string;
+	description: string;
+}
 
 /**
  * Decorator that automatically instantiates a class when it's defined.
@@ -29,417 +67,755 @@ function selfExecute<T extends { new (...args: any[]): {} }>(constructor: T) {
 }
 
 /**
- * Main application class for creating GitHub Gists with AI-generated descriptions.
- * This class handles file selection, content analysis, and gist creation.
+ * Enhanced GitHub Gist creator with AI-generated descriptions.
+ * Features improved error handling, file filtering, progress tracking,
+ * and better user experience.
  */
 @selfExecute
-class Main {
-	// API keys
-	private geminiApiKey: string;
-	private githubToken: string;
-	private rl: readline.Interface;
+class EnhancedGistCreator {
+	private readonly geminiApiKey: string;
+	private readonly githubToken: string;
+	private readonly rl: readline.Interface;
+	private readonly ai: GoogleGenAI;
+	private readonly config: AppConfig;
 
 	/**
-	 * Initializes the application with API keys and sets up the readline interface.
+	 * Initializes the application with enhanced configuration and validation.
 	 */
 	constructor() {
-		this.geminiApiKey = process.env.GEMINI_API_KEY || "";
-		this.githubToken = process.env.GITHUB_TOKEN_M || "";
+		this.geminiApiKey =
+			process.env.GEMINI_API_KEY || "";
+		this.githubToken =
+			process.env.GITHUB_TOKEN || "";
 		this.rl = readline.createInterface({
 			input: process.stdin,
 			output: process.stdout,
 		});
+
+		this.ai = new GoogleGenAI({ apiKey: this.geminiApiKey });
+
+		this.config = {
+			model: "gemini-2.0-flash-exp",
+			maxOutputTokens: 8_192,
+			temperature: 0.1,
+			maxConcurrency: 3,
+			retryAttempts: 3,
+			retryDelay: 1_000,
+			maxFileSize: 1_024 * 1_024, // 1MB
+			supportedExtensions: new Set([
+				"js", "ts", "jsx", "tsx", "py", "java", "cpp", "c", "cs", "php", "rb", 
+				"go", "rs", "swift", "kt", "scala", "html", "css", "scss", "sass", "less",
+				"json", "xml", "yaml", "yml", "md", "txt", "sql", "sh", "bash", "ps1",
+				"dockerfile", "makefile", "cmake", "gradle",
+			]),
+			truncateContentAt: 8_000,
+		};
+
 		this.initialize();
 	}
 
 	/**
-	 * Validates environment variables and starts the application if run directly.
+	 * Validates environment and initializes the application.
 	 */
-	private initialize() {
+	private initialize(): void {
 		this.validateEnvironmentVariables();
+		this.displayWelcomeMessage();
 
-		if (require.main === module) {
+		if (import.meta.url === `file://${process.argv[1]}`) {
 			this.run()
-				.catch(console.error)
+				.catch((error) => {
+					console.error("\n❌ Application error:", error.message);
+					process.exit(1);
+				})
 				.finally(() => this.rl.close());
 		}
 	}
 
 	/**
-	 * Ensures required API keys are available in environment variables.
-	 * Exits the process if any required keys are missing.
+	 * Displays a welcome message with application info.
 	 */
-	private validateEnvironmentVariables() {
+	private displayWelcomeMessage(): void {
+		console.log("\n🚀 Enhanced GitHub Gist Creator with AI Descriptions");
+		console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+		console.log(
+			`📂 Max file size: ${this.formatBytes(this.config.maxFileSize)}`,
+		);
+		console.log(
+			`🔧 Supported extensions: ${Array.from(this.config.supportedExtensions).slice(0, 10).join(", ")}${this.config.supportedExtensions.size > 10 ? "..." : ""}`,
+		);
+		console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+	}
+
+	/**
+	 * Validates required environment variables with better error messages.
+	 */
+	private validateEnvironmentVariables(): void {
+		const errors: string[] = [];
+
 		if (!this.geminiApiKey) {
-			console.error("Error: GEMINI_API_KEY environment variable is not set");
-			process.exit(1);
+			errors.push("❌ GEMINI_API_KEY environment variable is required");
 		}
 
 		if (!this.githubToken) {
-			console.error("Error: No GitHub token found in environment variables");
+			errors.push(
+				"❌ GITHUB_TOKEN or GITHUB_TOKEN_M environment variable is required",
+			);
+		}
+
+		if (errors.length > 0) {
+			console.error("\n🔴 Configuration Error:");
+			errors.forEach((error) => console.error(error));
+			console.error(
+				"\n💡 Please set the required environment variables and try again.",
+			);
 			process.exit(1);
 		}
 	}
 
 	/**
-	 * Prompts the user with a question and returns their response.
-	 * @param question - The question to display to the user
-	 * @returns A promise that resolves to the user's input
+	 * Enhanced user prompt with better formatting.
 	 */
 	private async promptUser(question: string): Promise<string> {
 		return new Promise((resolve) => {
-			this.rl.question(question, resolve);
+			this.rl.question(`\n❓ ${question}`, (answer) => {
+				resolve(answer.trim());
+			});
 		});
 	}
 
 	/**
-	 * Main execution flow of the application.
-	 * Handles file selection, description generation, and gist creation.
+	 * Main execution flow with enhanced error handling and progress tracking.
 	 */
-	async run() {
-		// Get current working directory
-		const currentDir = process.cwd();
-		console.log(`Current working directory: ${currentDir}`);
+	async run(): Promise<void> {
+		try {
+			const currentDir = process.cwd();
+			console.log(`📍 Working directory: ${currentDir}`);
 
-		const files = this.listFiles(currentDir);
-		this.displayFiles(files);
+			const allFiles = this.listFiles(currentDir);
+			const validFiles = this.filterValidFiles(allFiles, currentDir);
 
-		const selectedFiles = await this.selectFiles(files);
-		console.log("\nSelected files:", selectedFiles);
-
-		if (selectedFiles.length === 0) {
-			console.log("No files selected. Exiting.");
-			return;
-		}
-
-		// Choose which file should be the title
-		let titleFile = selectedFiles[0]; // Default to first file
-		if (selectedFiles.length > 1) {
-			const titleIndex = await this.chooseTitleFile(selectedFiles);
-			titleFile = selectedFiles[titleIndex];
-		}
-		console.log(`\nUsing "${titleFile}" as the title for the gist.`);
-
-		// Collect all file contents and descriptions
-		const fileData: Record<string, { content: string; description: string }> =
-			{};
-		const createdDescriptionFiles: string[] = [];
-
-		for (const file of selectedFiles) {
-			const filePath = path.join(currentDir, file);
-			const extension = path.extname(file).slice(1);
-
-			console.log(`\nProcessing: ${file} (${extension})`);
-
-			try {
-				// Generate description using AI
-				const description = await this.generateDescription(filePath, extension);
-				console.log(`Description generated successfully.`);
-
-				// Read file content
-				const content = fs.readFileSync(filePath, "utf-8");
-
-				// Store file data
-				fileData[file] = {
-					content,
-					description,
-				};
-
-				// Save description locally and track the file path
-				const descFilePath = this.saveDescription(
-					currentDir,
-					file,
-					description,
-				);
-				createdDescriptionFiles.push(descFilePath);
-			} catch (error) {
-				console.error(`Error processing ${file}:`, error);
+			if (validFiles.length === 0) {
+				console.log("\n⚠️  No valid files found in the current directory.");
+				return;
 			}
-		}
 
-		// Create a single gist with all files
-		if (Object.keys(fileData).length > 0) {
-			try {
-				const gistUrl = await this.createGistWithMultipleFiles(
-					fileData,
-					titleFile,
-				);
-				console.log(`\nGist created with all selected files: ${gistUrl}`);
+			this.displayFiles(validFiles, currentDir);
 
-				// Delete the local description files
-				this.deleteDescriptionFiles(createdDescriptionFiles);
-			} catch (error) {
-				console.error("Error creating gist:", error);
+			const selectedFiles = await this.selectFiles(validFiles);
+
+			if (selectedFiles.length === 0) {
+				console.log("\n👋 No files selected. Goodbye!");
+				return;
 			}
+
+			console.log(`\n✅ Selected ${selectedFiles.length} file(s):`);
+			selectedFiles.forEach((file) => console.log(`   • ${file}`));
+
+			const titleFile = await this.chooseTitleFile(selectedFiles);
+			console.log(`\n📌 Using "${titleFile}" as the gist title.`);
+
+			const fileData = await this.processFiles(selectedFiles, currentDir);
+
+			if (Object.keys(fileData).length === 0) {
+				console.log("\n❌ No files were successfully processed.");
+				return;
+			}
+
+			await this.createAndPublishGist(fileData, titleFile);
+		} catch (error) {
+			console.error("\n💥 Unexpected error:", error);
+			throw error;
 		}
 	}
 
 	/**
-	 * Prompts the user to select which file should be used for the gist title.
-	 * @param files - Array of file names to choose from
-	 * @returns The index of the selected file
+	 * Filters files by size, extension, and other criteria.
 	 */
-	private async chooseTitleFile(files: string[]): Promise<number> {
-		console.log("\nChoose which file should be used for the gist title:");
-		files.forEach((file, index) => {
-			console.log(`${index + 1}. ${file}`);
+	private filterValidFiles(files: string[], directory: string): string[] {
+		return files.filter((file) => {
+			const filePath = path.join(directory, file);
+			const stats = fs.statSync(filePath);
+			const ext = path.extname(file).slice(1).toLowerCase();
+
+			if (stats.size > this.config.maxFileSize) {
+				return false;
+			}
+
+			if (!ext && !this.isLikelyScript(filePath)) {
+				return false;
+			}
+
+			if (ext && !this.config.supportedExtensions.has(ext)) {
+				return false;
+			}
+
+			// Skip hidden files and common build artifacts
+			if (file.startsWith(".") || this.isIgnoredFile(file)) {
+				return false;
+			}
+
+			return true;
 		});
-
-		const input = await this.promptUser("\nEnter file number for the title: ");
-		const index = parseInt(input.trim()) - 1;
-
-		// Validate input and return a valid index
-		if (isNaN(index) || index < 0 || index >= files.length) {
-			console.log("Invalid selection, using the first file as title.");
-			return 0;
-		}
-
-		return index;
 	}
 
 	/**
-	 * Lists all files in the specified directory.
-	 * @param directory - The directory path to scan
-	 * @returns Array of file names (excluding directories)
+	 * Checks if a file without extension is likely a script.
+	 */
+	private isLikelyScript(filePath: string): boolean {
+		try {
+			const content = fs.readFileSync(filePath, "utf-8");
+			const firstLine = content.split("\n")[0];
+			return (
+				firstLine?.startsWith("#!") ||
+				content.includes("#!/") ||
+				["Makefile", "Dockerfile", "Rakefile", "Gemfile"].includes(
+					path.basename(filePath),
+				)
+			);
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Checks if a file should be ignored (build artifacts, etc.).
+	 */
+	private isIgnoredFile(filename: string): boolean {
+		const ignoredPatterns = [
+			/\.min\.(js|css)$/,
+			/\.map$/,
+			/^package-lock\.json$/,
+			/^yarn\.lock$/,
+			/^.*\.log$/,
+			/^.*\.tmp$/,
+			/^.*\.cache$/,
+		];
+
+		return ignoredPatterns.some((pattern) => pattern.test(filename));
+	}
+
+	/**
+	 * Enhanced file listing with metadata.
 	 */
 	private listFiles(directory: string): string[] {
-		return fs
-			.readdirSync(directory)
-			.filter((file: string) =>
-				fs.statSync(path.join(directory, file)).isFile(),
-			);
+		try {
+			return fs
+				.readdirSync(directory)
+				.filter((file) => fs.statSync(path.join(directory, file)).isFile());
+		} catch (error) {
+			console.error(`❌ Error reading directory: ${error}`);
+			return [];
+		}
 	}
 
 	/**
-	 * Displays a numbered list of files to the console.
-	 * @param files - Array of file names to display
+	 * Enhanced file display with size and type information.
 	 */
-	private displayFiles(files: string[]) {
-		console.log("\nAvailable files:");
+	private displayFiles(files: string[], directory: string): void {
+		console.log(`\n📋 Found ${files.length} valid file(s):`);
+		console.log("┌" + "─".repeat(70) + "┐");
+
 		files.forEach((file, index) => {
-			console.log(`${index + 1}. ${file}`);
+			const filePath = path.join(directory, file);
+			const stats = fs.statSync(filePath);
+			const ext = path.extname(file).slice(1) || "no ext";
+			const size = this.formatBytes(stats.size);
+			const number = String(index + 1).padStart(2);
+			const fileName =
+				file.length > 25 ? file.substring(0, 22) + "..." : file.padEnd(25);
+			const fileType = `[${ext.toUpperCase()}]`.padEnd(12);
+			const fileSize = size.padStart(8);
+
+			console.log(`│ ${number}. ${fileName} ${fileType} ${fileSize} │`);
 		});
+
+		console.log("└" + "─".repeat(70) + "┘");
 	}
 
 	/**
-	 * Prompts the user to select files from the displayed list.
-	 * @param files - Array of file names to choose from
-	 * @returns Array of selected file names
+	 * Enhanced file selection with validation and shortcuts.
 	 */
 	private async selectFiles(files: string[]): Promise<string[]> {
 		const input = await this.promptUser(
-			"\nEnter file numbers to process (comma-separated, e.g., '1,3,5'): ",
+			"Enter file numbers (comma-separated, e.g., '1,3,5') or 'all' for all files: ",
 		);
+
+		if (input.toLowerCase() === "all") {
+			return files;
+		}
+
+		if (input.toLowerCase() === "exit" || input.toLowerCase() === "quit") {
+			return [];
+		}
 
 		const selectedIndices = input
 			.split(",")
-			.map((num: string) => parseInt(num.trim()) - 1)
-			.filter((index: number) => index >= 0 && index < files.length);
+			.map((num) => parseInt(num.trim()) - 1)
+			.filter((index) => !isNaN(index) && index >= 0 && index < files.length);
 
-		return selectedIndices.map((index: number) => files[index]);
+		return [...new Set(selectedIndices)].map((index) => files[index]!);
 	}
 
 	/**
-	 * Saves the generated description to a markdown file.
-	 * @param directory - The directory to save the file in
-	 * @param originalFile - The name of the file being described
-	 * @param description - The generated description content
+	 * Enhanced title file selection with better UX.
+	 */
+	private async chooseTitleFile(files: string[]): Promise<string> {
+		if (files.length === 1 && files[0]) {
+			return files[0];
+		}
+
+		console.log("\n🏷️  Choose the main file for the gist title:");
+		console.log("┌" + "─".repeat(50) + "┐");
+		files.forEach((file, index) => {
+			const number = String(index + 1).padStart(2);
+			const fileName =
+				file.length > 40 ? file.substring(0, 37) + "..." : file.padEnd(40);
+			console.log(`│ ${number}. ${fileName} │`);
+		});
+		console.log("└" + "─".repeat(50) + "┘");
+
+		const input = await this.promptUser(
+			"Enter file number for the title (or press Enter for first file): ",
+		);
+
+		if (!input && files[0]) return files[0];
+
+		const index = parseInt(input) - 1;
+
+		if (isNaN(index) || index < 0 || index >= files.length) {
+			console.log("⚠️  Invalid selection, using the first file as title.");
+			return files[0]!;
+		}
+
+		return files[index]!;
+	}
+
+	/**
+	 * Process files with progress tracking and concurrent processing.
+	 */
+	private async processFiles(
+		files: string[],
+		directory: string,
+	): Promise<Record<string, FileData>> {
+		console.log("\n🔄 Processing files...");
+		console.log("┌" + "─".repeat(60) + "┐");
+		const fileData: Record<string, FileData> = {};
+		const createdDescriptionFiles: string[] = [];
+
+		try {
+			const batches = this.createBatches(files, this.config.maxConcurrency);
+			let processedCount = 0;
+
+			for (const batch of batches) {
+				const batchPromises = batch.map(async (file) => {
+					const filePath = path.join(directory, file);
+					const extension = path.extname(file).slice(1) || "txt";
+
+					try {
+						const fileName =
+							file.length > 30
+								? file.substring(0, 27) + "..."
+								: file.padEnd(30);
+						process.stdout.write(`│ 🔍 Analyzing: ${fileName} │\r`);
+
+						const content = fs.readFileSync(filePath, "utf-8");
+						const stats = fs.statSync(filePath);
+
+						const description = await this.generateDescription(
+							filePath,
+							extension,
+							content,
+						);
+
+						fileData[file] = {
+							content,
+							description,
+							size: stats.size,
+							extension,
+						};
+
+						const descFilePath = this.saveDescription(
+							directory,
+							file,
+							description,
+						);
+						createdDescriptionFiles.push(descFilePath);
+
+						processedCount++;
+						const progress = String(processedCount).padStart(2);
+						const total = String(files.length).padStart(2);
+						console.log(`│ ✅ Completed: ${fileName} (${progress}/${total}) │`);
+					} catch (error) {
+						const fileName =
+							file.length > 30
+								? file.substring(0, 27) + "..."
+								: file.padEnd(30);
+						console.log(`│ ❌ Failed: ${fileName} │`);
+					}
+				});
+
+				await Promise.all(batchPromises);
+			}
+
+			console.log("└" + "─".repeat(60) + "┘");
+
+			setTimeout(
+				() => this.deleteDescriptionFiles(createdDescriptionFiles),
+				1_000,
+			);
+
+			return fileData;
+		} catch (error) {
+			this.deleteDescriptionFiles(createdDescriptionFiles);
+			throw error;
+		}
+	}
+
+	/**
+	 * Creates batches for concurrent processing.
+	 */
+	private createBatches<T>(items: T[], batchSize: number): T[][] {
+		const batches: T[][] = [];
+		for (let i = 0; i < items.length; i += batchSize) {
+			batches.push(items.slice(i, i + batchSize));
+		}
+		return batches;
+	}
+
+	/**
+	 * Enhanced description generation with better prompts and error handling.
+	 */
+	private async generateDescription(
+		filePath: string,
+		fileType: string,
+		content: string,
+	): Promise<string> {
+		const truncatedContent =
+			content.length > this.config.truncateContentAt
+				? content.substring(0, this.config.truncateContentAt) +
+					"\n\n... (truncated)"
+				: content;
+
+		const fileName = path.basename(filePath);
+		const lineCount = content.split("\n").length;
+
+  const prompt = `# ${fileName}
+_A concise technical summary in plain English._
+
+| Key | Value |
+| --- | ----- |
+| File type | ${fileType} |
+| Lines | ${lineCount} |
+| Size | ${this.formatBytes(content.length)} |
+| Generated | ${new Date().toLocaleString()} |
+| Target | ~/.config/git/gitdiff-exclude |
+
+## Purpose
+Provide a short statement of what this file does in practical terms.
+
+## Key elements
+- Home-dir resolution via \`Bun.env.HOME\` or \`process.env.HOME\`.
+- Base path constant and relative path for the exclude file.
+- Default exclusion patterns list.
+
+## Runtime & dependencies
+- Uses Node.js \`path\` module.
+- Optional support for Bun runtime.
+
+## How it works
+1. Determine the home directory.
+2. Compute absolute path to the exclude file.
+3. Prepare default Git diff-exclude patterns.
+4. (Note: no filesystem operations done here.)
+
+## Usage
+Intended to be invoked by a script or CLI that ensures the file exists, merges patterns, etc.
+
+> [!NOTE]
+> The current implementation only defines data; it doesn't write to disk.
+
+## Next steps
+- Add idempotent file write logic.
+- Allow configuring target path.
+- Offer a dry-run mode for preview.
+
+Content snippet:
+
+\`\`\`${fileType}
+${truncatedContent}
+\`\`\`
+`;
+
+		try {
+			const generatedText = await this.makeApiCall(prompt);
+			return this.formatDescription(
+				fileName,
+				fileType,
+				generatedText,
+				lineCount,
+				content.length,
+			);
+		} catch (error) {
+			console.warn(
+				`⚠️  AI generation failed for ${fileName}, using fallback description`,
+			);
+			return this.createFallbackDescription(
+				fileName,
+				fileType,
+				content,
+				lineCount,
+			);
+		}
+	}
+
+	/**
+	 * Formats the final description with consistent structure.
+	 */
+	private formatDescription(
+		fileName: string,
+		fileType: string,
+		description: string,
+		lineCount: number,
+		size: number,
+	): string {
+		return `# ${fileName}
+
+**File Type:** ${fileType.toUpperCase()}  
+**Lines:** ${lineCount}  
+**Size:** ${this.formatBytes(size)}  
+**Generated:** ${new Date().toLocaleString()}
+
+---
+
+${description}
+
+---
+*Description generated using AI analysis*`;
+	}
+
+	/**
+	 * Creates a fallback description when AI generation fails.
+	 */
+	private createFallbackDescription(
+		fileName: string,
+		fileType: string,
+		content: string,
+		lineCount: number,
+	): string {
+		const preview =
+			content.length > 200 ? content.substring(0, 200) + "..." : content;
+
+		return `# ${fileName}
+
+**File Type:** ${fileType.toUpperCase()}  
+**Lines:** ${lineCount}  
+**Size:** ${this.formatBytes(content.length)}  
+**Generated:** ${new Date().toLocaleString()}
+
+## Basic Analysis
+
+This is a ${fileType} file containing ${lineCount} lines of code.
+
+### Content Preview
+\`\`\`${fileType}
+${preview}
+\`\`\`
+
+*Note: AI-powered analysis was unavailable. This is a basic fallback description.*`;
+	}
+
+	/**
+	 * Enhanced API call with exponential backoff and better error handling.
+	 */
+	private async makeApiCall(prompt: string, attempt = 1): Promise<string> {
+		const delay = this.config.retryDelay * 2 ** (attempt - 1);
+
+		try {
+			const response = await this.ai.models.generateContent({
+				model: this.config.model,
+				contents: [{ parts: [{ text: prompt }] }],
+				config: {
+					maxOutputTokens: this.config.maxOutputTokens,
+					temperature: this.config.temperature,
+					systemInstruction: `You are an expert code analyst and technical writer. Provide detailed, accurate, and insightful analysis of code files. Focus on technical aspects, architecture, and practical usage. Write in a clear, professional tone suitable for developers.`,
+				},
+			});
+
+			const generatedContent =
+				response.candidates?.[0]?.content?.parts?.[0]?.text;
+
+			if (!generatedContent) {
+				throw new Error("No content generated from API response");
+			}
+
+			return generatedContent;
+		} catch (error) {
+			if (attempt < this.config.retryAttempts) {
+				console.log(
+					`   ⏳ Retrying in ${delay}ms... (attempt ${attempt + 1}/${this.config.retryAttempts})`,
+				);
+				await new Promise((resolve) => setTimeout(resolve, delay));
+				return this.makeApiCall(prompt, attempt + 1);
+			}
+			throw error;
+		}
+	}
+
+	/**
+	 * Creates and publishes the gist with enhanced error handling.
+	 */
+	private async createAndPublishGist(
+		fileData: Record<string, FileData>,
+		titleFile: string,
+	): Promise<void> {
+		console.log("\n🚀 Creating gist...");
+		console.log("┌" + "─".repeat(50) + "┐");
+
+		try {
+			const gistUrl = await this.createGistWithMultipleFiles(
+				fileData,
+				titleFile,
+			);
+			console.log("└" + "─".repeat(50) + "┘");
+
+			console.log("\n🎉 Success! Gist created:");
+			console.log("┌" + "─".repeat(60) + "┐");
+			console.log(`│ 🔗 ${gistUrl.padEnd(58)} │`);
+
+			const totalSize = Object.values(fileData).reduce(
+				(sum, data) => sum + data.size,
+				0,
+			);
+			const fileCount = Object.keys(fileData).length;
+			console.log(
+				`│ 📊 Total files: ${String(fileCount).padStart(3)}${" ".repeat(45)} │`,
+			);
+			console.log(
+				`│ 📏 Total size: ${this.formatBytes(totalSize).padStart(10)}${" ".repeat(38)} │`,
+			);
+			console.log("└" + "─".repeat(60) + "┘");
+		} catch (error) {
+			console.log("└" + "─".repeat(50) + "┘");
+			console.error("\n❌ Failed to create gist:", error);
+		}
+	}
+
+	/**
+	 * Enhanced gist creation with better structure and error handling.
+	 */
+	private async createGistWithMultipleFiles(
+		fileData: Record<string, FileData>,
+		titleFile: string,
+	): Promise<string> {
+		const cleanTitle = path.basename(titleFile, path.extname(titleFile));
+		const gistDescription = `${cleanTitle} - Enhanced with AI-generated documentation`;
+
+		const gistFiles: Record<string, { content: string }> = {};
+
+		if (fileData[titleFile]) {
+			gistFiles[titleFile] = { content: fileData[titleFile].content };
+
+			const descFileName = `${cleanTitle}_README.md`;
+			gistFiles[descFileName] = { content: fileData[titleFile].description };
+		}
+
+		for (const [fileName, data] of Object.entries(fileData)) {
+			if (fileName === titleFile) continue;
+
+			gistFiles[fileName] = { content: data.content };
+
+			const descFileName = `${path.basename(fileName, path.extname(fileName))}_README.md`;
+			gistFiles[descFileName] = { content: data.description };
+		}
+
+		const response = await fetch("https://api.github.com/gists", {
+			method: "POST",
+			headers: {
+				Accept: "application/vnd.github+json",
+				Authorization: `Bearer ${this.githubToken}`,
+				"X-GitHub-Api-Version": "2022-11-28",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				description: gistDescription,
+				public: false,
+				files: gistFiles,
+			}),
+		});
+
+		if (!response.ok) {
+			const errorData = await response.json().catch(() => ({}));
+			// Fix: Replace Error.isError() with proper error checking
+			const errorMessage =
+				errorData && typeof errorData === "object" && "message" in errorData
+					? errorData.message
+					: response.statusText;
+			throw new Error(`GitHub API error (${response.status}): ${errorMessage}`);
+		}
+
+		const data = (await response.json()) as GistResponse;
+		return data.html_url;
+	}
+
+	/**
+	 * Enhanced description saving with better error handling.
 	 */
 	private saveDescription(
 		directory: string,
 		originalFile: string,
 		description: string,
 	): string {
-		const descriptionFile = path.join(
-			directory,
-			`${path.basename(originalFile, path.extname(originalFile))}.md`,
-		);
+		const baseName = path.basename(originalFile, path.extname(originalFile));
+		const descriptionFile = path.join(directory, `${baseName}_description.md`);
 
-		fs.writeFileSync(descriptionFile, description);
-		console.log(`Description saved to: ${descriptionFile}`);
-
-		return descriptionFile; // Return the file path
+		try {
+			fs.writeFileSync(descriptionFile, description, "utf-8");
+			return descriptionFile;
+		} catch (error) {
+			console.warn(`⚠️  Failed to save description for ${originalFile}`);
+			return "";
+		}
 	}
 
 	/**
-	 * Deletes the local description files.
-	 * @param filePaths - Array of file paths to delete
+	 * Enhanced cleanup with better error handling.
 	 */
 	private deleteDescriptionFiles(filePaths: string[]): void {
-		console.log("\nCleaning up local description files...");
+		if (filePaths.length === 0) return;
+
+		console.log("\n🧹 Cleaning up temporary files...");
+		console.log("┌" + "─".repeat(50) + "┐");
 
 		for (const filePath of filePaths) {
+			if (!filePath) continue;
+
 			try {
-				fs.unlinkSync(filePath);
-				console.log(`Deleted: ${filePath}`);
+				if (fs.existsSync(filePath)) {
+					fs.unlinkSync(filePath);
+					const fileName = path.basename(filePath).padEnd(35);
+					console.log(`│ 🗑️  Deleted: ${fileName} │`);
+				}
 			} catch (error) {
-				console.error(`Failed to delete ${filePath}:`, error);
+				const fileName = path.basename(filePath).padEnd(35);
+				console.log(`│ ⚠️  Failed: ${fileName} │`);
 			}
 		}
+
+		console.log("└" + "─".repeat(50) + "┘");
 	}
 
 	/**
-	 * Generates an AI description of a file using the Gemini API.
-	 * @param filePath - Path to the file to analyze
-	 * @param fileType - The file extension/type
-	 * @returns A formatted markdown description of the file
+	 * Formats bytes into human-readable format.
 	 */
-	async generateDescription(
-		filePath: string,
-		fileType: string,
-	): Promise<string> {
-		const content = fs.readFileSync(filePath, "utf-8");
+	private formatBytes(bytes: number): string {
+		if (bytes === 0) return "0 B";
 
-		const truncatedContent =
-			content.length > 5000 ? content.substring(0, 5000) + "..." : content;
+		const k = 1024;
+		const sizes = ["B", "KB", "MB", "GB"];
+		const i = Math.floor(Math.log(bytes) / Math.log(k));
 
-		const prompt = `Please analyze this ${fileType} file and provide a detailed description, and assume that any missing import reference is there, don't mention it:
-    
-Filename: ${path.basename(filePath)}
-Content:
-\`\`\`${fileType}
-${truncatedContent}
-\`\`\`
-
-Generate a markdown description that includes:
-1. A summary of what the file does
-2. Key components or functions
-3. Any notable patterns or techniques used
-4. Potential use cases`;
-
-		try {
-			const response = await fetch(
-				"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
-				{
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						"x-goog-api-key": this.geminiApiKey,
-					},
-					body: JSON.stringify({
-						contents: [
-							{
-								parts: [
-									{
-										text: prompt,
-									},
-								],
-							},
-						],
-					}),
-				},
-			);
-
-			if (!response.ok) {
-				throw new Error(`API request failed with status ${response.status}`);
-			}
-
-			const data = await response.json();
-
-			// Extract the generated text from the response
-			const generatedText = data.candidates[0].content.parts[0].text;
-
-			// Format the final description
-			return (
-				`# ${path.basename(filePath)} Description\n\n` +
-				`**File Type:** ${fileType}\n\n` +
-				`**Generated Description:**\n\n` +
-				`${generatedText}\n\n` +
-				`*Description generated on ${new Date().toLocaleString()}*`
-			);
-		} catch (error) {
-			console.error("Error calling Gemini API:", error);
-
-			// Fallback to a basic description if API call fails
-			return (
-				`# ${path.basename(filePath)} Description\n\n` +
-				`**File Type:** ${fileType}\n\n` +
-				`**Generated Description:**\n` +
-				`This is a ${fileType} file with approximately ${content.length} characters.\n\n` +
-				`**Sample Content:**\n` +
-				"```\n" +
-				(content.length > 100 ? content.substring(0, 100) + "..." : content) +
-				"\n```\n\n" +
-				`*Description generated on ${new Date().toLocaleString()}*\n\n` +
-				`Note: AI-powered description failed. This is a fallback description.`
-			);
-		}
-	}
-
-	/**
-	 * Creates a GitHub Gist containing multiple files with their descriptions.
-	 * @param fileData - Object containing file contents and descriptions
-	 * @param titleFile - The file to use as the title for the gist
-	 * @returns The URL of the created gist
-	 */
-	async createGistWithMultipleFiles(
-		fileData: Record<string, { content: string; description: string }>,
-		titleFile: string,
-	): Promise<string> {
-		try {
-			// Create a descriptive name for the gist using the selected title file
-			const gistDescription = `${titleFile} and related files - with AI-generated descriptions`;
-
-			// Prepare the files object for the gist
-			const gistFiles: Record<string, { content: string }> = {};
-
-			// First add the title file to ensure it's first in the gist
-			if (fileData[titleFile]) {
-				gistFiles[titleFile] = {
-					content: fileData[titleFile].content,
-				};
-
-				// Add its description
-				const titleDescFileName = `${path.basename(titleFile, path.extname(titleFile))}_description.md`;
-				gistFiles[titleDescFileName] = {
-					content: fileData[titleFile].description,
-				};
-			}
-
-			// Add the rest of the files and their descriptions
-			for (const [fileName, data] of Object.entries(fileData)) {
-				// Skip the title file as we've already added it
-				if (fileName === titleFile) continue;
-
-				// Add the original file
-				gistFiles[fileName] = {
-					content: data.content,
-				};
-
-				// Add the description file
-				const descFileName = `${path.basename(fileName, path.extname(fileName))}_description.md`;
-				gistFiles[descFileName] = {
-					content: data.description,
-				};
-			}
-
-			const response = await fetch("https://api.github.com/gists", {
-				method: "POST",
-				headers: {
-					Accept: "application/vnd.github+json",
-					Authorization: `Bearer ${this.githubToken}`,
-					"X-GitHub-Api-Version": "2022-11-28",
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					description: gistDescription,
-					public: false,
-					files: gistFiles,
-				}),
-			});
-
-			if (!response.ok) {
-				const errorText = await response.text();
-				throw new Error(
-					`GitHub API request failed with status ${response.status}: ${errorText}`,
-				);
-			}
-
-			const data = await response.json();
-			return data.html_url;
-		} catch (error) {
-			console.error("Error creating gist:", error);
-			return "Failed to create gist";
-		}
+		return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
 	}
 }
+
+export default EnhancedGistCreator;

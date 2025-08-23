@@ -47,7 +47,7 @@ if (require.main === module) {
 			await write(filePath, Array.from(book.values()).join("\n"));
 		} catch (error) {
 			console.error("An error occurred:", error);
-			throw new Error(`${error instanceof Error ? error.message : error}`);
+			throw new Error(`${Error.isError(error) ? error.message : error}`);
 		}
 	})();
 	process.exit(0);
