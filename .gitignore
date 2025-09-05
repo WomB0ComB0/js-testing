@@ -39,6 +39,9 @@ service-account.json
 *.txt
 .git
 resume.md
-fire.json
-crawl-results-*.json
-credentials.json
+# fire.json
+# crawl-results-*.json
+# credentials.json
+# config.json
+*.json
+!package.json
