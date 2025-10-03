@@ -462,6 +462,6 @@ async function main() {
 }
 
 // Run the bot
-if (require.main === module) { main().catch(console.eror); }
+if (require.main === module) { main().catch(console.error); }
 
 export { TwitchStreamBot };
