@@ -127,25 +127,25 @@ At its core, the system revolves around a set of Bash scripts executed by the us
 
 ```mermaid
 graph TD
-    A[User / Cron Job] --> B{Execute Script};
+    A[User / Cron Job] --> B{Execute Script}
 
-    B --> C1[setup.sh];
-    B --> C2[cleanup.sh];
-    B --> C3[health_backup.sh];
-    B --> C4[sec.sh];
+    B --> C1[setup.sh]
+    B --> C2[cleanup.sh]
+    B --> C3[health_backup.sh]
+    B --> C4[sec.sh]
 
-    C1 -- Initial Setup --> R(Raspberry Pi OS);
-    C2 -- Optimization & Cleanup --> R;
-    C3 -- Health Checks & Backups --> R;
-    C4 -- Security Hardening --> R;
+    C1 -- Initial Setup --> R(Raspberry Pi OS)
+    C2 -- Optimization & Cleanup --> R
+    C3 -- Health Checks & Backups --> R
+    C4 -- Security Hardening --> R
 
-    R -- System Services --> D(Systemd);
-    R -- Kernel Parameters --> E(sysctl.conf);
-    R -- Boot Configuration --> F(config.txt / cmdline.txt);
-    R -- Filesystem Mounts --> G(fstab);
-    R -- Network Services --> H(Network Manager / dhcpcd);
-    R -- SSH Daemon --> I(sshd_config);
-    R -- Package Management --> J(APT);
+    R -- System Services --> D(Systemd)
+    R -- Kernel Parameters --> E(sysctl.conf)
+    R -- Boot Configuration --> F(config.txt / cmdline.txt)
+    R -- Filesystem Mounts --> G(fstab)
+    R -- Network Services --> H(Network Manager / dhcpcd)
+    R -- SSH Daemon --> I(sshd_config)
+    R -- Package Management --> J(APT)
 
     subgraph External Tools
         K[smartmontools]
@@ -154,12 +154,12 @@ graph TD
         N[nmon / iotop]
     end
 
-    C3 -. utilizes .-> K;
-    C4 -. utilizes .-> L & M;
-    C2 -. configures .-> J;
-    C2 -. tunes .-> E,F,G,I;
-    C2 -. disables .-> H, D;
-    C3 -. monitors .-> N;
+    C3 -. utilizes .-> K
+    C4 -. utilizes .-> L & M
+    C2 -. configures .-> J
+    C2 -. tunes .-> E,F,G,I
+    C2 -. disables .-> H, D
+    C3 -. monitors .-> N
 ```
 *Figure 1: High-Level Component Interaction Diagram*
 
