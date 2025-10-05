@@ -158,7 +158,7 @@ graph TD
     C4 -. utilizes .-> L & M
     C2 -. configures .-> J
     C2 -. tunes .-> E,F,G,I
-    C2 -. disables .-> H & D  <-- FIX: Changed 'H, D' to 'H & D'
+    C2 -. disables .-> H & D
     C3 -. monitors .-> N
 ```
 *Figure 1: High-Level Component Interaction Diagram*
