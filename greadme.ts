@@ -20,6 +20,12 @@
  *   bun readme-gen.ts https://github.com/user/repo --format mdx
  *   bun readme-gen.ts https://github.com/user/repo --output README.md
  *   bun readme-gen.ts https://github.com/user/repo --style comprehensive
+ *   bun readme-gen.ts https://github.com/user/repo --push
+ *   bun readme-gen.ts https://github.com/user/repo --push --branch develop
+ *   bun readme-gen.ts https://github.com/user/repo --push --branch develop --style comprehensive
+ *   bun readme-gen.ts https://github.com/user/repo --push --branch develop --style comprehensive --format mdx
+ *   bun readme-gen.ts https://github.com/user/repo --push --branch develop --style comprehensive --format mdx --output README.md
+ *   bun readme-gen.ts https://github.com/user/repo --push --branch develop --style comprehensive --format mdx --output README.md
  */
 
 import { GoogleGenAI, type Model } from "@google/genai";
