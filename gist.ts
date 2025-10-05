@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // -*- typescript -*-
 
 /**
@@ -23,10 +24,10 @@
  * SOFTWARE.
  */
 
-import { GoogleGenAI } from "@google/genai";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
+import { GoogleGenAI } from "@google/genai";
 
 /**
  * Interface for file data structure
@@ -89,10 +90,8 @@ class Gist {
 	 * Initializes the application with enhanced configuration and validation.
 	 */
 	constructor() {
-		this.geminiApiKey =
-			process.env.GEMINI_API_KEY || "";
-		this.githubToken =
-			process.env.GITHUB_TOKEN || "";
+		this.geminiApiKey = process.env.GEMINI_API_KEY || "";
+		this.githubToken = process.env.GITHUB_TOKEN || "";
 		this.rl = readline.createInterface({
 			input: process.stdin,
 			output: process.stdout,
@@ -109,10 +108,41 @@ class Gist {
 			retryDelay: 1_000,
 			maxFileSize: 1_024 * 1_024, // 1MB
 			supportedExtensions: new Set([
-				"js", "ts", "jsx", "tsx", "py", "java", "cpp", "c", "cs", "php", "rb", 
-				"go", "rs", "swift", "kt", "scala", "html", "css", "scss", "sass", "less",
-				"json", "xml", "yaml", "yml", "md", "txt", "sql", "sh", "bash", "ps1",
-				"dockerfile", "makefile", "cmake", "gradle",
+				"js",
+				"ts",
+				"jsx",
+				"tsx",
+				"py",
+				"java",
+				"cpp",
+				"c",
+				"cs",
+				"php",
+				"rb",
+				"go",
+				"rs",
+				"swift",
+				"kt",
+				"scala",
+				"html",
+				"css",
+				"scss",
+				"sass",
+				"less",
+				"json",
+				"xml",
+				"yaml",
+				"yml",
+				"md",
+				"txt",
+				"sql",
+				"sh",
+				"bash",
+				"ps1",
+				"dockerfile",
+				"makefile",
+				"cmake",
+				"gradle",
 			]),
 			truncateContentAt: 8_000,
 		};
@@ -505,7 +535,7 @@ class Gist {
 		const fileName = path.basename(filePath);
 		const lineCount = content.split("\n").length;
 
-  const prompt = `# ${fileName}
+		const prompt = `# ${fileName}
 _A concise technical summary in plain English._
 
 | Key | Value |

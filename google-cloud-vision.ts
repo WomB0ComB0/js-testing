@@ -70,4 +70,4 @@ export async function reverseImageSearch(
 	return data;
 }
 
-(async () => console.log(await reverseImageSearch('./test_image.jpg')))()
+(async () => console.log(await reverseImageSearch("./test_image.jpg")))();

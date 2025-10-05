@@ -1,53 +1,28 @@
 #!/usr/bin/env node
-/**
- * Copyright (c) 2025 Mike Odnis
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-
-// -*- typescript -*-
-// @ts-check
-'use strict'
 
 /**
  * @file This script automates the process of reorganizing project files.
  * @author Jane Doe
  */
 
-import fs from 'node:fs/promises';
-import path from 'node:path';
+import fs from "node:fs/promises";
+import path from "node:path";
 
 export const main = async () => {
-  console.log('Starting the script...');
-  // --- Your logic here ---
-}
+	console.log("Starting the script...");
+	// --- Your logic here ---
+};
 export default main;
 
 const shutdown = async () => {
-  console.log('Shutting down the script...');
-  process.exit(0);
-}
+	console.log("Shutting down the script...");
+	process.exit(0);
+};
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 main().catch((err) => {
-  console.error('Script failed with an error:', err);
-  shutdown();
+	console.error("Script failed with an error:", err);
+	shutdown();
 });

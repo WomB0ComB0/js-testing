@@ -35,6 +35,7 @@ log
 .aider*
 service-account.json
 *.md
+!README.md
 *.csv
 *.txt
 .git

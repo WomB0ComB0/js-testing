@@ -20,13 +20,13 @@
  * SOFTWARE.
  */
 
-import { GoogleGenAI, Model } from '@google/genai';
+import { GoogleGenAI, type Model } from "@google/genai";
 
 /**
  * Model parameters interface
  */
 export interface ModelParams {
-  model: string;
+	model: string;
 }
 
 /**
@@ -35,52 +35,51 @@ export interface ModelParams {
  * @returns {Promise<ModelParams>} The latest free model parameters
  */
 export async function getLatestFreeModel(apiKey: string): Promise<ModelParams> {
-  try {
-    const genAI = new GoogleGenAI({ apiKey });
-    
-    // Fetch all available models
-    const modelsPager = await genAI.models.list();
-    
-    // Iterate through all pages to get all models
-    const allModels: Model[] = [];
-    for await (const model of modelsPager) {
-      allModels.push(model);
-    }
-    
-    // Filter for free models (typically Flash models)
-    // Prioritize: Flash-8B > Flash-2.0 > Flash-1.5
-    const freeModels = allModels.filter((model: Model) => 
-      model.name?.includes('flash') && 
-      !model.name?.includes('pro')
-    );
-    
-    // Sort by version/name to get the latest
-    freeModels.sort((a: Model, b: Model) => {
-      // Extract version numbers and compare
-      const extractVersion = (name?: string) => {
-        if (!name) return 0;
-        const match = name.match(/(\d+\.?\d*)/g);
-        return match ? parseFloat(match.join('.')) : 0;
-      };
-      return extractVersion(b.name) - extractVersion(a.name);
-    });
-    
-    if (freeModels.length === 0) {
-      // Fallback to known free model
-      console.warn('No free models found, using fallback');
-      return { model: 'gemini-1.5-flash' };
-    }
-    
-    // Return the latest free model (remove 'models/' prefix)
-    const modelName = freeModels[0].name?.replace('models/', '') || 'gemini-1.5-flash';
-    console.log(`Selected model: ${modelName}`);
-    
-    return { model: modelName };
-  } catch (error) {
-    console.error('Error fetching models:', error);
-    // Fallback to known free model
-    return { model: 'gemini-1.5-flash' };
-  }
+	try {
+		const genAI = new GoogleGenAI({ apiKey });
+
+		// Fetch all available models
+		const modelsPager = (await genAI.models.list());
+
+		// Iterate through all pages to get all models
+		const allModels: Model[] = [];
+		for await (const model of modelsPager) allModels.push(model);
+
+		// Filter for free models (typically Flash models)
+		// Prioritize: Flash-8B > Flash-2.0 > Flash-1.5
+		const freeModels = allModels.filter(
+			(model: Model) =>
+				model.name?.includes("flash") && !model.name?.includes("pro"),
+		);
+
+		// Sort by version/name to get the latest
+		freeModels.sort((a: Model, b: Model) => {
+			// Extract version numbers and compare
+			const extractVersion = (name?: string) => {
+				if (!name) return 0;
+				const match = name.match(/(\d+\.?\d*)/g);
+				return match ? parseFloat(match.join(".")) : 0;
+			};
+			return extractVersion(b.name) - extractVersion(a.name);
+		});
+
+		if (freeModels.length === 0) {
+			// Fallback to known free model
+			console.warn("No free models found, using fallback");
+			return { model: "gemini-1.5-flash" };
+		}
+
+		// Return the latest free model (remove 'models/' prefix)
+		const modelName =
+			freeModels[0].name?.replace("models/", "") || "gemini-1.5-flash";
+		console.log(`Selected model: ${modelName}`);
+
+		return { model: modelName };
+	} catch (error) {
+		console.error("Error fetching models:", error);
+		// Fallback to known free model
+		return { model: "gemini-1.5-flash" };
+	}
 }
 
 /**
@@ -96,24 +95,28 @@ const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
  * @returns {Promise<ModelParams>} The latest free model parameters
  */
 export async function getCachedFreeModel(
-  apiKey: string, 
-  forceRefresh: boolean = false
+	apiKey: string,
+	forceRefresh: boolean = false,
 ): Promise<ModelParams> {
-  const now = Date.now();
-  
-  // Return cached model if valid and not forcing refresh
-  if (!forceRefresh && cachedModel && (now - cachedModel.timestamp) < CACHE_DURATION) {
-    console.log('Using cached model:', cachedModel.params.model);
-    return cachedModel.params;
-  }
-  
-  // Fetch new model
-  const params = await getLatestFreeModel(apiKey);
-  
-  // Update cache
-  cachedModel = { params, timestamp: now };
-  
-  return params;
+	const now = Date.now();
+
+	// Return cached model if valid and not forcing refresh
+	if (
+		!forceRefresh &&
+		cachedModel &&
+		now - cachedModel.timestamp < CACHE_DURATION
+	) {
+		console.log("Using cached model:", cachedModel.params.model);
+		return cachedModel.params;
+	}
+
+	// Fetch new model
+	const params = (await getLatestFreeModel(apiKey));
+
+	// Update cache
+	cachedModel = { params, timestamp: now };
+
+	return params;
 }
 
 /**
@@ -121,11 +124,25 @@ export async function getCachedFreeModel(
  * This can be used as a drop-in replacement for your current export
  */
 export const gemini_model: ModelParams = {
-  model: 'gemini-1.5-flash-8b', // Latest free model as of Oct 2024
+	model: "gemini-1.5-flash-8b" as const satisfies ModelParams["model"],
 };
 
-// Usage example:
-const modelParams = await getCachedFreeModel(process.env.GEMINI_API_KEY || '');
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-const model = genAI.models.get({ model: modelParams.model });
-console.log(model);
+(async () => {
+	const modelParams = await getCachedFreeModel(
+		process.env.GEMINI_API_KEY ||
+			(() => {
+				console.error("GEMINI_API_KEY is not set");
+				process.exit(1);
+			})(),
+	);
+	const genAI = new GoogleGenAI({
+		apiKey:
+			process.env.GEMINI_API_KEY ||
+			(() => {
+				console.error("GEMINI_API_KEY is not set");
+				process.exit(1);
+			})(),
+	});
+	const model = await genAI.models.get({ model: modelParams.model });
+	console.log(model);
+})();
