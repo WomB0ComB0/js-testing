@@ -1,4 +1,25 @@
 #!/usr/bin/env bun
+/**
+ * Copyright (c) 2025 Mike Odnis
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 
 /**
  * GitHub Repository Analyzer with Gemini AI
@@ -207,7 +228,7 @@ const GITINGEST_API = 'https://gitingest.com/api/ingest' as const;
 const GITHUB_API = 'https://api.github.com' as const;
 const GITHUB_API_VERSION = '2022-11-28' as const;
 const DEFAULT_MAX_FILE_SIZE = '1118' as const;
-const CONTENT_PREVIEW_LENGTH = 3000 as const;
+const CONTENT_PREVIEW_LENGTH = 3_000 as const;
 
 // ============================================================================
 // Gemini Model Selection
