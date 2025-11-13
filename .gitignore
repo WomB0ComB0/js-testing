@@ -46,3 +46,4 @@ resume.md
 # config.json
 *.json
 !package.json
+afro*

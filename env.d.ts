@@ -72,7 +72,14 @@ declare global {
 			GOOGLE_SEARCH_API_KEY: string;
 			GOOGLE_SEARCH_ENGINE_ID: string;
 			SERP_API_KEY: string;
+			SMTP_HOST: string;
+			SMTP_PORT: string;
+			SMTP_USER: string;
+			SMTP_PASSWORD: string;
+			FROM_NAME: string;
+			FROM_EMAIL: string
 		}
 	}
 }
-export {};
+export { };
+
