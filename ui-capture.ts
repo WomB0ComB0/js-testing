@@ -40,9 +40,11 @@
  */
 
 import { Schema as S } from "@effect/schema";
-import { Context, Effect, Layer, Option, Queue, Ref } from "effect";
+import { Context, Effect, Layer, Option, Queue, Ref, Schedule } from "effect";
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { type Browser, chromium, type Page } from 'playwright';
 
 // --- Schema Definitions ---
@@ -111,6 +113,9 @@ const CaptureConfigFields = {
   includeSubdomains: S.Boolean,
   allowedHosts: S.Array(S.String),
   routeConcurrency: S.Number.pipe(S.int(), S.positive()),
+  menuInteractionSelectors: S.Array(S.String),
+  screenshotHideSelectors: S.Array(S.String),
+  ffmpegPath: S.String,
 };
 
 export class CaptureConfig extends S.Class<CaptureConfig>("CaptureConfig")(CaptureConfigFields) {
@@ -128,6 +133,9 @@ export class CaptureConfig extends S.Class<CaptureConfig>("CaptureConfig")(Captu
     includeSubdomains: false,
     allowedHosts: [],
     routeConcurrency: 2,
+    menuInteractionSelectors: [],
+    screenshotHideSelectors: [],
+    ffmpegPath: 'ffmpeg',
   });
 }
 
@@ -145,6 +153,8 @@ type ShutdownTask = {
 type QueueTask = RouteTask | ShutdownTask;
 
 const ShutdownSignal: ShutdownTask = { type: 'shutdown' } as const;
+
+const execFileAsync = promisify(execFile);
 
 type ViewportConfigInput = ViewportConfig | {
   readonly name: string;
@@ -167,6 +177,9 @@ export type CaptureConfigOverrides = Partial<{
   includeSubdomains: boolean;
   allowedHosts: ReadonlyArray<string>;
   routeConcurrency: number;
+  menuInteractionSelectors: ReadonlyArray<string>;
+  screenshotHideSelectors: ReadonlyArray<string>;
+  ffmpegPath: string;
 }>;
 
 const toViewportInstance = (viewport: ViewportConfigInput): ViewportConfig =>
@@ -212,6 +225,13 @@ export const createCaptureConfig = (
     allowedHosts: overrides.allowedHosts
       ? Array.from(overrides.allowedHosts)
       : base.allowedHosts,
+    menuInteractionSelectors: overrides.menuInteractionSelectors
+      ? Array.from(overrides.menuInteractionSelectors)
+      : base.menuInteractionSelectors,
+    screenshotHideSelectors: overrides.screenshotHideSelectors
+      ? Array.from(overrides.screenshotHideSelectors)
+      : base.screenshotHideSelectors,
+    ffmpegPath: overrides.ffmpegPath ?? base.ffmpegPath,
   });
 };
 
@@ -251,6 +271,305 @@ export class FileSystemError extends S.TaggedError<FileSystemError>()("FileSyste
   operation: S.String,
   cause: S.Unknown,
 }) {}
+
+type LinkDiscoveryTools = {
+  readonly prepareForLinkDiscovery: (page: Page, url: string) => Effect.Effect<void, CaptureError>;
+  readonly extractLinks: (page: Page) => Effect.Effect<readonly string[], never>;
+};
+
+const LINK_FILTER_CONCURRENCY = 32;
+const navigationRetryPolicy = Schedule.recurs(3);
+const captureRetryPolicy = Schedule.recurs(2);
+const VIDEO_QUALITY_PROFILES = [
+  { name: 'high' as const, scale: 1, dir: 'high-quality', transcode: false },
+  { name: 'medium' as const, scale: 0.75, dir: 'medium-quality', transcode: true },
+  { name: 'low' as const, scale: 0.5, dir: 'low-quality', transcode: true },
+];
+
+const transcodeVideo = (
+  ffmpegPath: string,
+  inputPath: string,
+  outputPath: string,
+  scale: number
+): Effect.Effect<void, FileSystemError> =>
+  Effect.tryPromise({
+    try: async () => {
+      await execFileAsync(ffmpegPath, [
+        '-y',
+        '-i',
+        inputPath,
+        '-vf',
+        `scale=iw*${scale}:-2`,
+        '-c:v',
+        'libvpx-vp9',
+        '-b:v',
+        '0',
+        outputPath,
+      ]);
+    },
+    catch: (error) =>
+      new FileSystemError({
+        path: outputPath,
+        operation: 'ffmpeg-transcode',
+        cause: error,
+      }),
+  });
+
+const createLinkDiscoveryTools = (options: {
+  readonly hostMatchesFilters: (hostname: string) => boolean;
+  readonly menuInteractionSelectors: ReadonlyArray<string>;
+}) => {
+  const { hostMatchesFilters, menuInteractionSelectors } = options;
+  const interactionSelectors = menuInteractionSelectors.filter((selector) => !!selector?.trim());
+
+  const prepareForLinkDiscovery = (
+    page: Page,
+    url: string
+  ): Effect.Effect<void, CaptureError> =>
+    Effect.tryPromise({
+      try: async () => {
+        await page.evaluate(async (selectors: string[]) => {
+          const safeClick = (element: Element) => {
+            if (!(element instanceof HTMLElement)) {
+              return;
+            }
+            const tag = element.tagName.toLowerCase();
+            if (element.hasAttribute('href') || tag === 'a') {
+              return;
+            }
+            if (typeof element.click === 'function') {
+              element.click();
+            } else {
+              element.dispatchEvent(
+                new MouseEvent('click', { bubbles: true, cancelable: true })
+              );
+            }
+          };
+
+          document.querySelectorAll('details').forEach((detail) => {
+            if (!detail.open) {
+              detail.open = true;
+            }
+          });
+
+          document.querySelectorAll('summary').forEach((summary) => {
+            safeClick(summary);
+          });
+
+          selectors.forEach((selector) => {
+            if (!selector) {
+              return;
+            }
+            const elements = Array.from(document.querySelectorAll(selector)).slice(0, 10);
+            elements.forEach((element) => {
+              safeClick(element);
+            });
+          });
+
+          window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }, interactionSelectors);
+      },
+      catch: (error) =>
+        new CaptureError({
+          url,
+          message: 'Failed to prepare page for link discovery',
+          cause: error,
+        }),
+    });
+
+  const extractLinks = (page: Page): Effect.Effect<readonly string[], never> =>
+    Effect.tryPromise({
+      try: async () => {
+        return await page.evaluate(() => {
+          const normalize = (value: string | null | undefined): string | null => {
+            if (!value) {
+              return null;
+            }
+            const trimmed = value.trim();
+            if (
+              !trimmed ||
+              trimmed === '#' ||
+              trimmed.startsWith('javascript:') ||
+              trimmed.startsWith('mailto:') ||
+              trimmed.startsWith('tel:')
+            ) {
+              return null;
+            }
+            try {
+              const absolute = new URL(trimmed, window.location.href);
+              absolute.hash = '';
+              return absolute.href;
+            } catch {
+              return null;
+            }
+          };
+
+          const addValue = (candidate: string | null | undefined, into: Set<string>) => {
+            const normalized = normalize(candidate);
+            if (normalized) {
+              into.add(normalized);
+            }
+          };
+
+          const discovered = new Set<string>();
+          const anchorElements = Array.from(document.querySelectorAll('a[href], area[href]'));
+          anchorElements.forEach((element) => {
+            const href = element.getAttribute('href') ?? (element as HTMLAnchorElement).href;
+            addValue(href, discovered);
+          });
+
+          const attributeNames = [
+            'data-href',
+            'data-url',
+            'data-route',
+            'data-path',
+            'data-link',
+            'data-target',
+            'routerLink',
+            'routerlink',
+            'to',
+            'href',
+          ];
+          const attributeSelector = attributeNames.map((name) => `[${name}]`).join(',');
+
+          if (attributeSelector) {
+            const nodes = Array.from(document.querySelectorAll(attributeSelector));
+            nodes.forEach((node) => {
+              if (!(node instanceof HTMLElement)) {
+                return;
+              }
+
+              attributeNames.forEach((attribute) => {
+                const value =
+                  node.getAttribute(attribute) ??
+                  ((node as unknown as Record<string, unknown>)[attribute] as string | undefined);
+
+                if (!value) {
+                  return;
+                }
+
+                value
+                  .split(/[\s,]+/)
+                  .filter(Boolean)
+                  .forEach((token) => addValue(token, discovered));
+              });
+            });
+          }
+
+          const collectFromObject = (value: unknown, into: Set<string>, depth = 0, limit = { count: 0 }) => {
+            if (!value || depth > 4 || limit.count > 500) {
+              return;
+            }
+
+            if (typeof value === 'string') {
+              limit.count += 1;
+              addValue(value, into);
+              return;
+            }
+
+            if (Array.isArray(value)) {
+              for (const entry of value) {
+                collectFromObject(entry, into, depth + 1, limit);
+                if (limit.count > 500) {
+                  break;
+                }
+              }
+              return;
+            }
+
+            if (typeof value === 'object') {
+              limit.count += 1;
+              const obj = value as Record<string, unknown>;
+              for (const key of Object.keys(obj)) {
+                const lowered = key.toLowerCase();
+                if (
+                  ['route', 'path', 'href', 'url', 'to', 'link'].some((token) =>
+                    lowered.includes(token)
+                  )
+                ) {
+                  collectFromObject(obj[key], into, depth + 1, limit);
+                } else if (depth < 2) {
+                  collectFromObject(obj[key], into, depth + 1, limit);
+                }
+                if (limit.count > 500) {
+                  break;
+                }
+              }
+            }
+          };
+
+          const globalWindow = window as unknown as Record<string, any>;
+          const globalRouteSources = [
+            globalWindow.__ROUTES__,
+            globalWindow.__ROUTE_DATA__,
+            globalWindow.__PAGE_LIST__,
+            globalWindow.__PAGES__,
+            globalWindow.__APP_DATA__,
+            globalWindow.__STATE__,
+            globalWindow.__NEXT_DATA__?.props?.pageProps,
+            globalWindow.__NUXT__?.router?.options?.routes,
+            globalWindow.__NUXT__?.data,
+            globalWindow.__SAPPER__?.routes,
+          ];
+
+          globalRouteSources
+            .filter((source) => source !== undefined && source !== null)
+            .forEach((source) => collectFromObject(source, discovered));
+
+          return Array.from(discovered);
+        });
+      },
+      catch: () => [] as readonly string[],
+    }).pipe(
+      Effect.flatMap((links) =>
+        Effect.forEach(
+          links,
+          (link) =>
+            Effect.sync(() => {
+              try {
+                if (!link) {
+                  return Option.none<string>();
+                }
+
+                const url = new URL(link);
+                if (
+                  (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+                  !hostMatchesFilters(url.hostname)
+                ) {
+                  return Option.none<string>();
+                }
+
+                url.hash = '';
+                return Option.some(url.toString());
+              } catch {
+                return Option.none<string>();
+              }
+            }),
+          {
+            concurrency: Math.max(
+              1,
+              Math.min(LINK_FILTER_CONCURRENCY, Math.max(1, links.length))
+            ),
+          }
+        ).pipe(
+          Effect.map((options) => {
+            const uniqueLinks = new Set<string>();
+            for (const option of options) {
+              if (Option.isSome(option)) {
+                uniqueLinks.add(option.value);
+              }
+            }
+            return Array.from(uniqueLinks);
+          })
+        )
+      ),
+      Effect.orElseSucceed(() => [] as readonly string[])
+    );
+
+  return { prepareForLinkDiscovery, extractLinks } satisfies LinkDiscoveryTools;
+};
 
 // --- Context Tags ---
 
@@ -427,6 +746,9 @@ export class UICaptureService extends Effect.Service<UICaptureService>()("UICapt
           await fs.mkdir(path.join(routeDir, 'screenshots', 'png'), { recursive: true });
           await fs.mkdir(path.join(routeDir, 'screenshots', 'webp'), { recursive: true });
           await fs.mkdir(path.join(routeDir, 'screenshots', 'jpg'), { recursive: true });
+          await fs.mkdir(path.join(routeDir, 'screenshots', 'png', 'history'), { recursive: true });
+          await fs.mkdir(path.join(routeDir, 'screenshots', 'webp', 'history'), { recursive: true });
+          await fs.mkdir(path.join(routeDir, 'screenshots', 'jpg', 'history'), { recursive: true });
           
           if (cfg.captureVideo) {
             await fs.mkdir(path.join(routeDir, 'videos', 'high-quality'), { recursive: true });
@@ -441,69 +763,10 @@ export class UICaptureService extends Effect.Service<UICaptureService>()("UICapt
         }),
       });
 
-    // Extract same-origin links
-    const linkFilterConcurrency = 32;
-
-    /**
-     * Extracts eligible links from the current page, normalizing and deduplicating them.
-     * Filtering occurs concurrently to keep up with link-dense pages.
-     *
-     * @param page Playwright page currently being captured.
-     * @returns Array of absolute URLs that satisfy domain constraints.
-     */
-    const extractLinks = (page: Page): Effect.Effect<readonly string[], never> =>
-      Effect.tryPromise({
-        try: async () => {
-          return await page.$$eval('a[href]', (anchors) =>
-            Array.from(anchors, (anchor) => (anchor as HTMLAnchorElement).href)
-          );
-        },
-        catch: () => [] as readonly string[],
-      }).pipe(
-        Effect.flatMap((links) =>
-          Effect.forEach(
-            links,
-            (link) =>
-              Effect.sync(() => {
-                try {
-                  if (link === '#' || link.endsWith('#')) {
-                    return Option.none<string>();
-                  }
-
-                  const url = new URL(link);
-                  if (
-                    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
-                    !hostMatchesFilters(url.hostname)
-                  ) {
-                    return Option.none<string>();
-                  }
-
-                  url.hash = '';
-                  return Option.some(url.toString());
-                } catch {
-                  return Option.none<string>();
-                }
-              }),
-            {
-              concurrency: Math.max(
-                1,
-                Math.min(linkFilterConcurrency, Math.max(1, links.length))
-              ),
-            }
-          ).pipe(
-            Effect.map((options) => {
-              const uniqueLinks = new Set<string>();
-              for (const option of options) {
-                if (Option.isSome(option)) {
-                  uniqueLinks.add(option.value);
-                }
-              }
-              return Array.from(uniqueLinks);
-            })
-          )
-        ),
-        Effect.orElseSucceed(() => [] as readonly string[])
-      );
+    const { prepareForLinkDiscovery, extractLinks } = createLinkDiscoveryTools({
+      hostMatchesFilters,
+      menuInteractionSelectors: cfg.menuInteractionSelectors,
+    });
 
     // Capture screenshot in all formats
     /**
@@ -519,59 +782,130 @@ export class UICaptureService extends Effect.Service<UICaptureService>()("UICapt
       viewport: ViewportConfig,
       routeDir: string,
       timestamp: string
-    ): Effect.Effect<ScreenshotPaths, CaptureError> =>
-      Effect.gen(function* () {
-        yield* Effect.tryPromise({
-          try: () => page.setViewportSize({
-            width: viewport.width,
-            height: viewport.height,
+    ): Effect.Effect<ScreenshotPaths, CaptureError | FileSystemError> =>
+      Effect.acquireUseRelease(
+        cfg.screenshotHideSelectors.length > 0
+          ? Effect.tryPromise({
+              try: async () => {
+                const styleId = `ui-capture-mask-${Date.now().toString(36)}-${Math.random()
+                  .toString(36)
+                  .slice(2)}`;
+                await page.evaluate(
+                  ({ id, selectors }: { id: string; selectors: readonly string[] }) => {
+                    const css = selectors
+                      .map((selector) => `${selector} { visibility: hidden !important; opacity: 0 !important; }`)
+                      .join('\n');
+                    const style = document.createElement('style');
+                    style.id = id;
+                    style.textContent = css;
+                    document.head.appendChild(style);
+                  },
+                  { id: styleId, selectors: cfg.screenshotHideSelectors }
+                );
+                return styleId;
+              },
+              catch: (error) =>
+                new CaptureError({
+                  url: page.url(),
+                  message: 'Failed to hide screenshot selectors',
+                  cause: error,
+                }),
+            })
+          : Effect.succeed<string | null>(null),
+        () =>
+          Effect.gen(function* () {
+            yield* Effect.tryPromise({
+              try: () => page.setViewportSize({
+                width: viewport.width,
+                height: viewport.height,
+              }),
+              catch: (error) => new CaptureError({
+                url: page.url(),
+                message: 'Failed to set viewport',
+                cause: error,
+              }),
+            }).pipe(Effect.retry(captureRetryPolicy));
+
+            yield* Effect.sleep(1000);
+
+            const baseFilename = `${viewport.name}_${viewport.width}x${viewport.height}`;
+
+            const pngLatestPath = path.join(routeDir, 'screenshots', 'png', `${baseFilename}_latest.png`);
+            const pngHistoryPath = path.join(routeDir, 'screenshots', 'png', 'history', `${baseFilename}_${timestamp}.png`);
+            const webpLatestPath = path.join(routeDir, 'screenshots', 'webp', `${baseFilename}_latest.webp`);
+            const webpHistoryPath = path.join(routeDir, 'screenshots', 'webp', 'history', `${baseFilename}_${timestamp}.webp`);
+            const jpgLatestPath = path.join(routeDir, 'screenshots', 'jpg', `${baseFilename}_latest.jpg`);
+            const jpgHistoryPath = path.join(routeDir, 'screenshots', 'jpg', 'history', `${baseFilename}_${timestamp}.jpg`);
+
+            const screenshotSpecs = [
+              {
+                type: 'png' as const,
+                latestPath: pngLatestPath,
+                historyPath: pngHistoryPath,
+                options: { type: 'png' as const },
+              },
+              {
+                type: 'webp' as const,
+                latestPath: webpLatestPath,
+                historyPath: webpHistoryPath,
+                options: { type: 'jpeg' as const, quality: 90 },
+              },
+              {
+                type: 'jpg' as const,
+                latestPath: jpgLatestPath,
+                historyPath: jpgHistoryPath,
+                options: { type: 'jpeg' as const, quality: 85 },
+              },
+            ];
+
+            for (const spec of screenshotSpecs) {
+              yield* Effect.tryPromise({
+                try: () =>
+                  page.screenshot({
+                    path: spec.latestPath,
+                    fullPage: true,
+                    type: spec.options.type,
+                    quality: spec.options.quality,
+                  }),
+                catch: (error) => new CaptureError({
+                  url: page.url(),
+                  message: `Failed to capture ${spec.type.toUpperCase()}`,
+                  cause: error,
+                }),
+              }).pipe(Effect.retry(captureRetryPolicy));
+
+              yield* Effect.tryPromise({
+                try: () => fs.copyFile(spec.latestPath, spec.historyPath),
+                catch: (error) => new FileSystemError({
+                  path: spec.historyPath,
+                  operation: 'copyFile',
+                  cause: error,
+                }),
+              });
+            }
+
+            console.log(`    ✓ Screenshots saved: ${baseFilename} (latest + history)`);
+
+            return new ScreenshotPaths({
+              png: pngLatestPath,
+              webp: webpLatestPath,
+              jpg: jpgLatestPath,
+            });
           }),
-          catch: (error) => new CaptureError({
-            url: page.url(),
-            message: 'Failed to set viewport',
-            cause: error,
-          }),
-        });
-
-        yield* Effect.sleep(1000);
-
-        const baseFilename = `${viewport.name}_${viewport.width}x${viewport.height}_${timestamp}`;
-
-        const pngPath = path.join(routeDir, 'screenshots', 'png', `${baseFilename}.png`);
-        const webpPath = path.join(routeDir, 'screenshots', 'webp', `${baseFilename}.webp`);
-        const jpgPath = path.join(routeDir, 'screenshots', 'jpg', `${baseFilename}.jpg`);
-
-        yield* Effect.all([
-          Effect.tryPromise({
-            try: () => page.screenshot({ path: pngPath, fullPage: true, type: 'png' }),
-            catch: (error) => new CaptureError({
-              url: page.url(),
-              message: 'Failed to capture PNG',
-              cause: error,
-            }),
-          }),
-          Effect.tryPromise({
-            try: () => page.screenshot({ path: webpPath, fullPage: true, type: 'jpeg', quality: 90 }),
-            catch: (error) => new CaptureError({
-              url: page.url(),
-              message: 'Failed to capture WebP',
-              cause: error,
-            }),
-          }),
-          Effect.tryPromise({
-            try: () => page.screenshot({ path: jpgPath, fullPage: true, type: 'jpeg', quality: 85 }),
-            catch: (error) => new CaptureError({
-              url: page.url(),
-              message: 'Failed to capture JPEG',
-              cause: error,
-            }),
-          }),
-        ], { concurrency: 3 });
-
-        console.log(`    ✓ Screenshots saved: ${baseFilename}`);
-
-        return new ScreenshotPaths({ png: pngPath, webp: webpPath, jpg: jpgPath });
-      });
+        (styleId) =>
+          styleId
+            ? Effect.tryPromise({
+                try: () =>
+                  page.evaluate((id: string) => {
+                    const existing = document.getElementById(id);
+                    if (existing && existing.parentNode) {
+                      existing.parentNode.removeChild(existing);
+                    }
+                  }, styleId),
+                catch: () => undefined,
+              }).pipe(Effect.catchAll(() => Effect.void))
+            : Effect.void
+      );
 
     // Capture video for viewport
     /**
@@ -598,136 +932,149 @@ export class UICaptureService extends Effect.Service<UICaptureService>()("UICapt
         }
 
         const baseFilename = `${viewport.name}_${viewport.width}x${viewport.height}_${timestamp}`;
-        const qualities = [
-          { name: 'high' as const, scale: 1.0, dir: 'high-quality' },
-          { name: 'medium' as const, scale: 0.75, dir: 'medium-quality' },
-          { name: 'low' as const, scale: 0.5, dir: 'low-quality' },
-        ];
+        const masterProfile = VIDEO_QUALITY_PROFILES[0];
+        const masterPath = path.join(routeDir, 'videos', masterProfile.dir, `${baseFilename}.webm`);
 
-        const paths = yield* Effect.all(
-          qualities.map((quality) =>
-            Effect.gen(function* () {
-              const context = yield* Effect.tryPromise({
-                try: () => browser!.newContext({
-                  recordVideo: {
-                    dir: path.join(routeDir, 'videos', quality.dir),
-                    size: {
-                      width: Math.floor(viewport.width * quality.scale),
-                      height: Math.floor(viewport.height * quality.scale),
-                    },
-                  },
-                  viewport: { width: viewport.width, height: viewport.height },
-                }),
-                catch: (error) => new CaptureError({
-                  url: page.url(),
-                  message: `Failed to create ${quality.name} quality context`,
-                  cause: error,
-                }),
-              });
+        const context = yield* Effect.tryPromise({
+          try: () => browser!.newContext({
+            recordVideo: {
+              dir: path.join(routeDir, 'videos', masterProfile.dir),
+              size: {
+                width: Math.floor(viewport.width * masterProfile.scale),
+                height: Math.floor(viewport.height * masterProfile.scale),
+              },
+            },
+            viewport: { width: viewport.width, height: viewport.height },
+          }),
+          catch: (error) => new CaptureError({
+            url: page.url(),
+            message: 'Failed to create master video context',
+            cause: error,
+          }),
+        }).pipe(Effect.retry(captureRetryPolicy));
 
-              const videoPage = yield* Effect.tryPromise({
-                try: () => context.newPage(),
-                catch: (error) => new CaptureError({
-                  url: page.url(),
-                  message: 'Failed to create video page',
-                  cause: error,
-                }),
-              });
+        const videoPage = yield* Effect.tryPromise({
+          try: () => context.newPage(),
+          catch: (error) => new CaptureError({
+            url: page.url(),
+            message: 'Failed to create video page',
+            cause: error,
+          }),
+        }).pipe(Effect.retry(captureRetryPolicy));
 
-              yield* Effect.tryPromise({
-                try: () => videoPage.goto(page.url(), { waitUntil: 'networkidle', timeout: 30000 }),
-                catch: (error) => new CaptureError({
-                  url: page.url(),
-                  message: 'Failed to navigate video page',
-                  cause: error,
-                }),
-              });
+        yield* Effect.tryPromise({
+          try: () => videoPage.goto(page.url(), { waitUntil: 'networkidle', timeout: 30000 }),
+          catch: (error) => new CaptureError({
+            url: page.url(),
+            message: 'Failed to navigate video page',
+            cause: error,
+          }),
+        }).pipe(Effect.retry(navigationRetryPolicy));
 
-              yield* Effect.sleep(cfg.waitTime);
+        yield* Effect.sleep(cfg.waitTime);
 
-              // Perform interactions if enabled
-              if (cfg.videoOptions.interactions) {
-                const scrollSteps = 5;
-                const scrollDelay = cfg.videoOptions.duration / (scrollSteps + 1);
+        if (cfg.videoOptions.interactions) {
+          const scrollSteps = 5;
+          const scrollDelay = cfg.videoOptions.duration / (scrollSteps + 1);
 
-                for (let i = 0; i < scrollSteps; i++) {
-                  yield* Effect.tryPromise({
-                    try: () => videoPage.evaluate((step) => {
-                      window.scrollTo({
-                        top: (document.body.scrollHeight / 5) * step,
-                        behavior: 'smooth',
-                      });
-                    }, i + 1),
-                    catch: () => undefined,
-                  });
-                  yield* Effect.sleep(scrollDelay);
-                }
-
-                yield* Effect.tryPromise({
-                  try: () => videoPage.evaluate(() => {
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }),
-                  catch: () => undefined,
+          for (let i = 0; i < scrollSteps; i++) {
+            yield* Effect.tryPromise({
+              try: () => videoPage.evaluate((step) => {
+                window.scrollTo({
+                  top: (document.body.scrollHeight / 5) * (step as number),
+                  behavior: 'smooth',
                 });
-                yield* Effect.sleep(1000);
-              } else {
-                yield* Effect.sleep(cfg.videoOptions.duration);
-              }
+              }, i + 1),
+              catch: (error) => new CaptureError({
+                url: page.url(),
+                message: 'Failed to run scroll interaction',
+                cause: error,
+              }),
+            }).pipe(Effect.catchAll(() => Effect.void));
+            yield* Effect.sleep(scrollDelay);
+          }
 
-              yield* Effect.tryPromise({
-                try: () => videoPage.close(),
-                catch: () => undefined,
-              });
+          yield* Effect.tryPromise({
+            try: () => videoPage.evaluate(() => {
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }),
+            catch: (error) => new CaptureError({
+              url: page.url(),
+              message: 'Failed to reset scroll position',
+              cause: error,
+            }),
+          }).pipe(Effect.catchAll(() => Effect.void));
+          yield* Effect.sleep(1000);
+        } else {
+          yield* Effect.sleep(cfg.videoOptions.duration);
+        }
 
-              const videoPath = yield* Effect.tryPromise({
-                try: async () => {
-                  const vp = await videoPage.video()?.path();
-                  await context.close();
-                  return vp;
-                },
-                catch: (error) => new CaptureError({
-                  url: page.url(),
-                  message: 'Failed to get video path',
-                  cause: error,
-                }),
-              });
+        yield* Effect.tryPromise({
+          try: () => videoPage.close(),
+          catch: (error) => new CaptureError({
+            url: page.url(),
+            message: 'Failed to close video page',
+            cause: error,
+          }),
+        }).pipe(Effect.catchAll(() => Effect.void));
 
-              if (!videoPath) {
-                return yield* Effect.fail(new CaptureError({
-                  url: page.url(),
-                  message: 'Video path is null',
-                  cause: null,
-                }));
-              }
+        const rawVideoPath = yield* Effect.tryPromise({
+          try: async () => {
+            const vp = await videoPage.video()?.path();
+            await context.close();
+            return vp;
+          },
+          catch: (error) => new CaptureError({
+            url: page.url(),
+            message: 'Failed to finalize video recording',
+            cause: error,
+          }),
+        });
 
-              const newPath = path.join(routeDir, 'videos', quality.dir, `${baseFilename}.webm`);
-              yield* Effect.tryPromise({
-                try: () => fs.rename(videoPath, newPath),
-                catch: (error) => new FileSystemError({
-                  path: newPath,
-                  operation: 'rename',
-                  cause: error,
-                }),
-              });
+        if (!rawVideoPath) {
+          return yield* Effect.fail(new CaptureError({
+            url: page.url(),
+            message: 'Video path is null',
+            cause: null,
+          }));
+        }
 
-              return [quality.name, newPath] as const;
-            }).pipe(
-              Effect.catchAll((error) => {
-                console.error(`Failed to capture ${quality.name} quality video:`, error);
-                return Effect.succeed([quality.name, ''] as const);
-              })
-            )
-          ),
-          { concurrency: 1 }
-        );
+        yield* Effect.tryPromise({
+          try: () => fs.rename(rawVideoPath, masterPath),
+          catch: (error) => new FileSystemError({
+            path: masterPath,
+            operation: 'rename',
+            cause: error,
+          }),
+        });
 
         const videoPaths: Record<'high' | 'medium' | 'low', string> = {
-          high: paths[0][1],
-          medium: paths[1][1],
-          low: paths[2][1],
+          high: masterPath,
+          medium: masterPath,
+          low: masterPath,
         };
+
+        for (const profile of VIDEO_QUALITY_PROFILES.slice(1)) {
+          const targetPath = path.join(routeDir, 'videos', profile.dir, `${baseFilename}.webm`);
+          const transcodeSucceeded = yield* transcodeVideo(
+            cfg.ffmpegPath,
+            masterPath,
+            targetPath,
+            profile.scale
+          ).pipe(
+            Effect.as(true),
+            Effect.catchAll((error) => {
+              console.error(`Failed to transcode ${profile.name} quality video:`, error);
+              return Effect.succeed(false);
+            })
+          );
+
+          if (transcodeSucceeded) {
+            videoPaths[profile.name] = targetPath;
+          }
+        }
         
-        console.log(`    ✓ Videos saved: ${baseFilename}`);
+        console.log(`    ✓ Video recorded for ${viewport.name}`);
 
         return new VideoQualityPaths(videoPaths);
       });
@@ -749,7 +1096,7 @@ export class UICaptureService extends Effect.Service<UICaptureService>()("UICapt
         yield* Effect.tryPromise({
           try: () => page.waitForLoadState('networkidle'),
           catch: (error) => new CaptureError({ url, message: 'Failed to wait for page load', cause: error }),
-        });
+        }).pipe(Effect.retry(captureRetryPolicy));
         yield* Effect.sleep(cfg.waitTime);
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -806,7 +1153,9 @@ export class UICaptureService extends Effect.Service<UICaptureService>()("UICapt
         yield* Effect.tryPromise({
           try: () => page.goto(task.url, { waitUntil: 'networkidle', timeout: 30000 }),
           catch: (error) => new CaptureError({ url: task.url, message: 'Failed to navigate', cause: error }),
-        });
+        }).pipe(Effect.retry(navigationRetryPolicy));
+
+        yield* prepareForLinkDiscovery(page, task.url);
 
         const discoveredLinks = task.depth < cfg.maxDepth
           ? yield* extractLinks(page)
@@ -1152,6 +1501,8 @@ const program = Effect.gen(function* () {
       { name: 'tablet', width: 768, height: 1024 },
       { name: 'mobile', width: 390, height: 844 },
     ],
+    menuInteractionSelectors: ['button[data-nav-toggle]', '[data-open-menu]'],
+    screenshotHideSelectors: ['.cookie-banner', '#chat-widget'],
   }))
 );
 
