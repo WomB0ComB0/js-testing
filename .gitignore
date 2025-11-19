@@ -47,3 +47,4 @@ resume.md
 *.json
 !package.json
 afro*
+ui-captures/
