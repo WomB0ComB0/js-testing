@@ -580,6 +580,156 @@ export class CaptureConfigTag extends Context.Tag("CaptureConfig")<
 
 // --- Service Definition ---
 
+/**
+ * UICaptureService
+ *
+ * Effect-based service that automates browser-driven UI capture for a website.
+ *
+ * Overview
+ * - Manages a single headless Chromium browser instance used by a pool of worker
+ *   contexts/pages to traverse a site's internal links, take screenshots in multiple
+ *   formats, optionally record videos at multiple quality tiers, and persist
+ *   machine- and human-readable reports.
+ * - The service is implemented as an Effect.Service and exposes two primary
+ *   asynchronous Effects: `captureWebsite` and `captureVideo`. All IO and side-effects
+ *   are wrapped in Effect primitives and can be composed, retried, or scheduled by
+ *   an Effect runtime.
+ *
+ * Behavior & Lifecycle
+ * - Initialization / Cleanup:
+ *   - `initialize` launches a Chromium instance (headless) with sandbox-avoiding args
+ *     and ensures the configured output directory exists.
+ *   - `cleanup` closes the browser and resets in-memory tracking structures (e.g. processedRoutes).
+ * - Concurrency & Scheduling:
+ *   - A bounded work queue is used with a configurable number of worker tasks
+ *     (cfg.routeConcurrency). Each worker holds its own context + page pair.
+ *   - Routes are scheduled with depth tracking and are deduplicated using an
+ *     in-memory `processedRoutes` Set. A `pendingTasks` Ref monitors outstanding work
+ *     and triggers graceful shutdown when no tasks remain.
+ * - Link discovery:
+ *   - `prepareForLinkDiscovery` and `extractLinks` utilities are used to find internal links.
+ *   - Host filtering is enforced via allow-lists and optional subdomain inclusion.
+ *
+ * Important Concepts
+ * - Config (cfg):
+ *   - Controls outputDir, allowedHosts, includeSubdomains, viewports, captureVideo,
+ *     ffmpegPath, waitTime, routeConcurrency, maxDepth, screenshotHideSelectors,
+ *     menuInteractionSelectors, videoOptions, and retry policies.
+ * - Host filtering:
+ *   - `canonicalizeHost` normalizes host/origin inputs (lowercased, no protocol, no www).
+ *   - `computeHostSuffixes` expands a host into suffixes (e.g. "a.b.c" -> ["a.b.c","b.c","c"]).
+ *   - `hydrateDomainFilters` seeds in-memory allowedHostnames and hostSuffixes using the
+ *     capture root and cfg.allowedHosts.
+ *   - `hostMatchesFilters` decides whether a discovered hostname qualifies for crawling,
+ *     honoring `cfg.includeSubdomains`.
+ * - Normalization and idempotency:
+ *   - `normalizeUrl` returns a canonical key used to deduplicate routes (origin + pathname,
+ *     trailing slash removed).
+ *   - `getRouteName` builds a filesystem-friendly slug for the pathname, falling back to
+ *     `'root'` for "/" and `'invalid-url'` when parsing fails.
+ *
+ * Capture Pipeline
+ * - createDirectories(routeDir)
+ *   - Ensures directory hierarchy exists for screenshots (png/webp/jpg + history) and videos
+ *     (per-quality directories) depending on cfg.captureVideo.
+ *   - Returns an Effect that may fail with a FileSystemError on mkdir/write failures.
+ *
+ * - captureScreenshots(page, viewport, routeDir, timestamp)
+ *   - Optionally injects a temporary <style> element to hide selectors specified in
+ *     cfg.screenshotHideSelectors; the style is removed in a safe release action.
+ *   - Sets viewport size (with retries), waits briefly, and captures screenshots:
+ *     - PNG: lossless, saved as `<viewport>_<w>x<h>_latest.png` and history copy with timestamp.
+ *     - WebP: uses JPEG options for pipeline conversion (quality tuned) — saved as `.webp`.
+ *     - JPEG: saved with configurable quality.
+ *   - Each screenshot operation is retried using captureRetryPolicy and each latest file is
+ *     copied to a history file to preserve past runs.
+ *   - Returns a ScreenshotPaths record with absolute paths to latest PNG/WEBP/JPG.
+ *   - Errors surface as CaptureError or FileSystemError.
+ *
+ * - captureVideo(page, viewport, routeDir, timestamp)
+ *   - Creates a separate browser context configured with Playwright's recordVideo for a
+ *     master, high-quality recording (profile-driven scaling).
+ *   - Navigates a new page to the current URL and optionally performs interactions
+ *     (e.g. scroll passes) when cfg.videoOptions.interactions is true to create more
+ *     representative recordings.
+ *   - Closes the page/context to flush the recorded file, moves the raw file to a
+ *     deterministic master path, and optionally transcodes the master recording into
+ *     multiple lower-quality webm targets using ffmpeg (transcoding errors are logged
+ *     per-profile and do not abort the whole service; failure is indicated by skipping
+ *     that quality level).
+ *   - Returns VideoQualityPaths containing high/medium/low file paths or fails with
+ *     CaptureError/FileSystemError when critical operations fail.
+ *
+ * - capturePage(page, url)
+ *   - Coordinates directory creation, waits for load state (`networkidle`), sleeps for
+ *     cfg.waitTime, and runs the screenshot and optional video capture across all
+ *     configured viewports. Each viewport capture runs sequentially (concurrency 1 by default).
+ *   - Aggregates results into a CaptureResult containing url, route slug, per-viewport
+ *     screenshot/video metadata, timestamp, and any error information.
+ *
+ * Worker & Queueing
+ * - processRouteTask(page, task, results, scheduleNext, workerLabel)
+ *   - Navigates to task.url, prepares the page for link discovery, extracts internal links
+ *     (respecting max depth), captures the page (capturePage), stores the CaptureResult into
+ *     the provided results Map keyed by task.normalizedUrl, and schedules discovered links
+ *     via `scheduleNext`.
+ *   - Errors during per-route processing are caught and logged per-worker; the worker ensures
+ *     markTaskComplete is invoked so the shutdown logic functions correctly.
+ *
+ * Reporting
+ * - generateReports(results)
+ *   - Produces a JSON machine-readable `capture-report.json` and a human-friendly `REPORT.md`
+ *     in cfg.outputDir. The JSON contains a CaptureReport with counts and per-route summaries.
+ *   - generateMarkdown builds the Markdown report, listing screenshots and videos with
+ *     relative links, and enumerates failed captures and their errors.
+ *
+ * Public API (returned as const)
+ * - captureWebsite(url: string): Effect.Effect<Map<string, CaptureResult>, BrowserError | CaptureError | FileSystemError>
+ *   - Entry point to capture an entire website starting from `url`.
+ *   - Performs domain filter hydration, starts the browser (initialize), creates the worker
+ *     pool and scheduling system, seeds the initial route, and waits for completion.
+ *   - Produces a Map keyed by normalized URLs to CaptureResult objects representing each
+ *     attempted capture.
+ *   - Fails with:
+ *     - BrowserError: critical failures during browser init/cleanup.
+ *     - CaptureError: navigation, page manipulation, or capture-specific failures.
+ *     - FileSystemError: failures writing files or creating directories.
+ *   - Side effects:
+ *     - Writes screenshots, videos, history copies, capture-report.json, and REPORT.md into cfg.outputDir.
+ *     - Logs progress and errors to stdout/stderr.
+ *
+ * - captureVideo(page: Page, viewport: ViewportConfig, routeDir: string, timestamp: string):
+ *   - Lower-level Effect exposed for recording video for a specific page/viewport pair.
+ *   - Useful for programmatic reuse in other flows if the caller already has an active Page
+ *     and a prepared routeDir. Returns VideoQualityPaths or fails with CaptureError/FileSystemError.
+ *
+ * Error Handling & Retries
+ * - Many IO and browser interactions are wrapped in Effect.tryPromise and are retried
+ *   according to configured retry policies (captureRetryPolicy, navigationRetryPolicy) where appropriate.
+ * - Non-critical failures during per-viewport/transcoding steps are logged and cause the
+ *   service to continue other work; critical initialization failures will abort the run.
+ *
+ * Notes & Best Practices
+ * - The service uses an in-memory Set to track processed normalized URLs. For long-running
+ *   or distributed runs where persistence across runs is required, persist this state externally.
+ * - Ensure cfg.ffmpegPath points to a valid ffmpeg binary when video transcoding is required.
+ * - When running in constrained CI environments, tune routeConcurrency and Chromium launch
+ *   flags to suit resource limits.
+ * - The Effects returned by the service are pure descriptions of work; they must be executed
+ *   by an Effect runtime to take effect.
+ *
+ * Example (conceptual)
+ * - const service = UICaptureService; // resolved via DI / effect environment
+ * - service.captureWebsite("https://example.com") // => Effect that will perform the capture when run
+ *
+ * Type Aliases / Domain Models (referenced)
+ * - CaptureResult: Aggregated result for a single route including screenshots, optional videos, timestamp, and error.
+ * - ScreenshotPaths: { png: string; webp: string; jpg: string; } — absolute latest paths.
+ * - VideoQualityPaths: { high: string; medium: string; low: string; } — absolute paths to webm files.
+ * - CaptureError, BrowserError, FileSystemError: Domain-specific error wrappers used to provide contextual error metadata.
+ *
+ * @public
+ */
 export class UICaptureService extends Effect.Service<UICaptureService>()("UICaptureService", {
   effect: Effect.gen(function* () {
     const cfg = yield* CaptureConfigTag;
