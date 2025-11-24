@@ -77,9 +77,8 @@ declare global {
 			SMTP_USER: string;
 			SMTP_PASSWORD: string;
 			FROM_NAME: string;
-			FROM_EMAIL: string
+			FROM_EMAIL: string;
 		}
 	}
 }
-export { };
-
+export {};

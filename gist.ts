@@ -24,10 +24,10 @@
  * SOFTWARE.
  */
 
-import { GoogleGenAI } from "@google/genai";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
+import { GoogleGenAI } from "@google/genai";
 
 /**
  * Interface for file data structure
@@ -664,7 +664,7 @@ ${preview}
 	 * Enhanced API call with exponential backoff and better error handling.
 	 */
 	private async makeApiCall(prompt: string, attempt = 1): Promise<string> {
-		const delay = Math.pow(this.config.retryDelay * 2, attempt - 1);
+		const delay = (this.config.retryDelay * 2) ** (attempt - 1);
 
 		try {
 			const response = await this.ai.models.generateContent({
@@ -677,7 +677,8 @@ ${preview}
 				},
 			});
 
-			const generatedContent = response.candidates?.[0]?.content?.parts?.[0]?.text;
+			const generatedContent =
+				response.candidates?.[0]?.content?.parts?.[0]?.text;
 
 			if (!generatedContent) {
 				throw new Error("No content generated from API response");

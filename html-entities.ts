@@ -21,7 +21,11 @@
  */
 
 // Encode every character as a decimal HTML character reference.
-const toEntities = (str: string) => str.split("").map(c => `&#${c.charCodeAt(0)};`).join("");
+const toEntities = (str: string) =>
+	str
+		.split("")
+		.map((c) => `&#${c.charCodeAt(0)};`)
+		.join("");
 
 /**
  * Build and obfuscate an href for "mailto:", "tel:", etc.
@@ -33,55 +37,55 @@ const toEntities = (str: string) => str.split("").map(c => `&#${c.charCodeAt(0)}
  * }
  */
 function obfuscateLink(opts: {
-  scheme: "mailto" | "tel" | string,
-  address: string,
-  params?: Record<string,string>,
-  text?: string             
+	scheme: "mailto" | "tel" | string;
+	address: string;
+	params?: Record<string, string>;
+	text?: string;
 }) {
-  const { scheme, address, params, text } = opts;
+	const { scheme, address, params, text } = opts;
 
-  // Build the URI
-  let uri = `${scheme}:${address}`;
+	// Build the URI
+	let uri = `${scheme}:${address}`;
 
-  // If we have params (e.g., mailto subject/body), percent-encode them
-  if (params && Object.keys(params).length) {
-    const qs = Object.entries(params)
-      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-      .join("&");
-    uri += `?${qs}`;
-  }
+	// If we have params (e.g., mailto subject/body), percent-encode them
+	if (params && Object.keys(params).length) {
+		const qs = Object.entries(params)
+			.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+			.join("&");
+		uri += `?${qs}`;
+	}
 
-  // Entity-encode the full href (including the scheme) and the visible text
-  const encodedHref = toEntities(uri);
-  const encodedText = toEntities(text ?? address);
+	// Entity-encode the full href (including the scheme) and the visible text
+	const encodedHref = toEntities(uri);
+	const encodedText = toEntities(text ?? address);
 
-  return { encodedHref, encodedText };
+	return { encodedHref, encodedText };
 }
 
 // ------- Examples -------
 
 // 1) mailto with subject/body
 const { encodedHref: mHref, encodedText: mText } = obfuscateLink({
-  scheme: "mailto",
-  address: "hello@example.com",
-  params: {
-    subject: "Hi Mike",
-    body: "Thanks!\n—Me" // \n will become %0D%0A
-  }
+	scheme: "mailto",
+	address: "hello@example.com",
+	params: {
+		subject: "Hi Mike",
+		body: "Thanks!\n—Me", // \n will become %0D%0A
+	},
 });
 // <a href="{mHref}">{mText}</a>
 
 // 2) tel
 const { encodedHref: tHref, encodedText: tText } = obfuscateLink({
-  scheme: "tel",
-  address: "+12015550123",
-  text: "+1 (201) 555-0123"
+	scheme: "tel",
+	address: "+12015550123",
+	text: "+1 (201) 555-0123",
 });
 // <a href="{tHref}">{tText}</a>
 
 (() => {
-  console.log(`ONE`)
-  console.table({ mHref, mText });
-  console.log(`TWO`)
-  console.table({ tHref, tText });
-})()
+	console.log(`ONE`);
+	console.table({ mHref, mText });
+	console.log(`TWO`);
+	console.table({ tHref, tText });
+})();

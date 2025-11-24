@@ -39,7 +39,7 @@ export async function getLatestFreeModel(apiKey: string): Promise<ModelParams> {
 		const genAI = new GoogleGenAI({ apiKey });
 
 		// Fetch all available models
-		const modelsPager = (await genAI.models.list());
+		const modelsPager = await genAI.models.list();
 
 		// Iterate through all pages to get all models
 		const allModels: Model[] = [];
@@ -111,7 +111,7 @@ export async function getCachedFreeModel(
 	}
 
 	// Fetch new model
-	const params = (await getLatestFreeModel(apiKey));
+	const params = await getLatestFreeModel(apiKey);
 
 	// Update cache
 	cachedModel = { params, timestamp: now };
