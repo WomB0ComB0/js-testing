@@ -1912,11 +1912,16 @@ export const CaptureConfigLive = (
 const program = Effect.gen(function* () {
 	const service = yield* UICaptureService;
 	// https://www.kappathetapi.org/
-	return yield* service.captureWebsite("https://wafflehacks.org");
+	return yield* service.captureWebsite("https://gdg-fsc.web.app/");
 }).pipe(
 	Effect.provide(UICaptureService.Default),
 	Effect.provide(
 		CaptureConfigLive({
+			routeConcurrency: 4,
+			maxDepth: 2,
+			waitTime: 2000,
+			outputDir: path.join(process.cwd(), "ui-captures"),
+			ffmpegPath: "ffmpeg",
 			captureVideo: true,
 			videoOptions: { duration: 15000, interactions: true },
 			viewports: [
@@ -1930,7 +1935,6 @@ const program = Effect.gen(function* () {
 	),
 );
 
-// Uncomment to run
 Effect.runPromise(program).catch(console.error);
 
 export default UICaptureService;
