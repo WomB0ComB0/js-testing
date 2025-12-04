@@ -1,36 +1,68 @@
-import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import path from "node:path";
-import readline from "node:readline/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { stdin as input, stdout as output } from "node:process";
+import readline from "node:readline/promises";
 
+/**
+ * Represents a job listing parsed from GitHub repositories.
+ * Contains all relevant information about a job posting including company, role, and application details.
+ */
 interface JobListing {
+  /** Company name offering the position */
   company: string;
+  /** Job role/title */
   role: string;
+  /** Job location(s) - filtered to US only */
   location: string;
+  /** Employment terms (e.g., "Spring 2026", "Fall 2025") or "N/A" if not specified */
   terms: string;
+  /** Direct link to the job application */
   applicationLink: string;
+  /** Age of the posting (e.g., "5d", "2mo") */
   age: string;
+  /** ISO timestamp when the job was added to our database */
   dateAdded: string;
+  /** Source URL where this job was found */
   source: string;
 }
 
+/**
+ * Tracks which job applications have been processed to prevent duplicates.
+ * Uses a Set for O(1) lookup performance.
+ */
 interface ProcessedJobsData {
+  /** Set of application links that have already been processed */
   processedLinks: Set<string>;
+  /** ISO timestamp of the last update */
   lastUpdated: string;
+  /** Total count of processed jobs */
   totalProcessed: number;
 }
 
+/**
+ * Main database structure for storing job listings.
+ * Separates unprocessed jobs from processed ones for efficient workflow management.
+ */
 interface JobsDatabase {
+  /** Array of jobs that haven't been reviewed/applied to yet */
   unprocessed: JobListing[];
+  /** Array of application links that have been processed */
   processed: string[];
+  /** Metadata about data sources */
   sources: {
+    /** Last update info for Summer 2026 internships */
     summer2026Internships: string;
+    /** Last update info for new grad positions */
     newGrad: string;
+    /** Last update info for off-season internships */
     offSeason: string;
   };
 }
 
+/**
+ * Application configuration constants.
+ * Controls batch sizes, file paths, data sources, and filtering criteria.
+ */
 const CONFIG = {
   BATCH_SIZE: 5,
   DATA_DIR: "./job-data",
@@ -39,23 +71,32 @@ const CONFIG = {
   GITHUB_SOURCES: [
     {
       name: "summer2026Internships",
-      url: "https://github.com/SimplifyJobs/Summer2026-Internships/blob/dev/README.md",
+      url: "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md",
+      displayUrl: "https://github.com/SimplifyJobs/Summer2026-Internships/blob/dev/README.md",
       type: "internship" as const,
     },
     {
       name: "newGrad",
-      url: "https://github.com/SimplifyJobs/New-Grad-Positions",
+      url: "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md",
+      displayUrl: "https://github.com/SimplifyJobs/New-Grad-Positions",
       type: "newgrad" as const,
     },
     {
       name: "offSeason",
-      url: "https://github.com/SimplifyJobs/Summer2026-Internships/blob/dev/README-Off-Season.md",
+      url: "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README-Off-Season.md",
+      displayUrl: "https://github.com/SimplifyJobs/Summer2026-Internships/blob/dev/README-Off-Season.md",
       type: "internship" as const,
     },
   ],
   MAX_AGE_DAYS: 30,
 } as const;
 
+/**
+ * Initializes the data directory if it doesn't exist.
+ * Creates the directory structure needed for storing job data.
+ * 
+ * @returns Promise that resolves when directory is created or already exists
+ */
 async function initializeDataDirectory(): Promise<void> {
   if (!existsSync(CONFIG.DATA_DIR)) {
     await mkdir(CONFIG.DATA_DIR, { recursive: true });
@@ -63,6 +104,12 @@ async function initializeDataDirectory(): Promise<void> {
   }
 }
 
+/**
+ * Loads the list of previously processed job applications from disk.
+ * Returns a fresh data structure if the file doesn't exist or can't be read.
+ * 
+ * @returns Promise resolving to ProcessedJobsData with Set of processed links
+ */
 async function loadProcessedJobs(): Promise<ProcessedJobsData> {
   try {
     if (existsSync(CONFIG.PROCESSED_FILE)) {
@@ -85,6 +132,13 @@ async function loadProcessedJobs(): Promise<ProcessedJobsData> {
   };
 }
 
+/**
+ * Persists processed jobs data to disk.
+ * Converts Set to Array for JSON serialization.
+ * 
+ * @param data - The processed jobs data to save
+ * @returns Promise that resolves when data is written to disk
+ */
 async function saveProcessedJobs(data: ProcessedJobsData): Promise<void> {
   const serializable = {
     processedLinks: Array.from(data.processedLinks),
@@ -100,6 +154,12 @@ async function saveProcessedJobs(data: ProcessedJobsData): Promise<void> {
   console.log(`Saved ${data.totalProcessed} processed jobs to ${CONFIG.PROCESSED_FILE}`);
 }
 
+/**
+ * Loads the main jobs database from disk.
+ * Returns an empty database structure if file doesn't exist or can't be read.
+ * 
+ * @returns Promise resolving to JobsDatabase with unprocessed and processed jobs
+ */
 async function loadJobsDatabase(): Promise<JobsDatabase> {
   try {
     if (existsSync(CONFIG.JOBS_FILE)) {
@@ -121,109 +181,323 @@ async function loadJobsDatabase(): Promise<JobsDatabase> {
   };
 }
 
+/**
+ * Persists the jobs database to disk.
+ * 
+ * @param db - The jobs database to save
+ * @returns Promise that resolves when database is written to disk
+ */
 async function saveJobsDatabase(db: JobsDatabase): Promise<void> {
   await writeFile(CONFIG.JOBS_FILE, JSON.stringify(db, null, 2), "utf-8");
   console.log(`Saved ${db.unprocessed.length} unprocessed jobs to ${CONFIG.JOBS_FILE}`);
 }
 
-function generateScraperScript(maxAgeDays: number = 30): string {
-  return `
-// Run this script in the browser console on the GitHub README page
-(function extractJobListings() {
-  const table = document.querySelector('table');
+/**
+ * Parses age text like "5d", "2mo", "1w" into number of days.
+ * Used to filter out jobs older than MAX_AGE_DAYS.
+ * 
+ * @param ageText - Age string from job posting (e.g., "5d", "2mo", "1w")
+ * @returns Number of days, or null if unable to parse
+ * 
+ * @example
+ * parseAgeInDays("5d")   // returns 5
+ * parseAgeInDays("2mo")  // returns 60
+ * parseAgeInDays("1w")   // returns 7
+ */
+function parseAgeInDays(ageText: string): number | null {
+  const trimmed = ageText.trim().toLowerCase();
   
-  if (!table) {
-    console.error('Table not found');
-    return null;
+  // Match patterns like "5d", "2mo", "1w"
+  const match = trimmed.match(/(\d+)\s*(d|day|days|mo|month|months|w|week|weeks)/i);
+  
+  if (!match) return null;
+  
+  const value = parseInt(match[1]);
+  const unit = match[2].toLowerCase();
+  
+  if (unit.startsWith('d')) {
+    return value;
+  } else if (unit.startsWith('mo')) {
+    return value * 30;
+  } else if (unit.startsWith('w')) {
+    return value * 7;
   }
-
-  const rows = table.querySelectorAll('tbody tr');
-  const results = [];
-
-  rows.forEach(row => {
-    const cells = row.querySelectorAll('td');
-    if (cells.length === 0) return;
-
-    const ageCell = cells[cells.length - 1];
-    const ageText = ageCell.textContent.trim();
-    
-    let dayAge = null;
-    if (ageText.includes('d')) {
-      dayAge = parseInt(ageText);
-    } else if (ageText.includes('mo')) {
-      dayAge = parseInt(ageText) * 30;
-    }
-
-    if (dayAge !== null && dayAge <= ${maxAgeDays}) {
-      const companyCell = cells[0];
-      const roleCell = cells[1];
-      const locationCell = cells[2];
-      const termsCell = cells[3];
-      const applicationCell = cells[4];
-      const link = applicationCell.querySelector('a');
-      
-      if (link) {
-        results.push({
-          company: companyCell.textContent.trim(),
-          role: roleCell.textContent.trim(),
-          location: locationCell.textContent.trim(),
-          terms: termsCell.textContent.trim(),
-          applicationLink: link.href,
-          age: ageText,
-          dateAdded: new Date().toISOString(),
-          source: window.location.href
-        });
-      }
-    }
-  });
-
-  console.log(\`Found \${results.length} jobs within last ${maxAgeDays} days\`);
-  console.log('Copy this JSON data:');
-  console.log(JSON.stringify(results, null, 2));
   
-  // Try to copy to clipboard
-  navigator.clipboard.writeText(JSON.stringify(results, null, 2))
-    .then(() => console.log('✓ Data copied to clipboard!'))
-    .catch(() => console.log('Could not auto-copy, please copy manually'));
-    
-  return results;
-})();
-`;
+  return null;
 }
 
-async function updateJobsFromSource(
-  sourceName: string,
-  newJobs: JobListing[]
-): Promise<void> {
+/**
+ * Determines if a location string represents a US location.
+ * Checks for US state abbreviations, common US patterns, and excludes non-US countries.
+ * 
+ * @param location - Location string from job posting
+ * @returns true if location is in the US, false otherwise
+ * 
+ * @example
+ * isUSLocation("New York, NY")           // true
+ * isUSLocation("Remote - USA")           // true
+ * isUSLocation("London, UK")             // false
+ * isUSLocation("Toronto, Canada")        // false
+ */
+function isUSLocation(location: string): boolean {
+  // US state abbreviations (includes DC and territories)
+  const usStates = /\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC|PR|VI|GU|AS|MP)\b/i;
+  
+  // Common US city patterns or "USA" mentions
+  const usPatterns = /\b(USA|United States|U\.S\.|Remote.*USA?|Nationwide)\b/i;
+  
+  // Exclude non-US countries/regions
+  const nonUSPatterns = /\b(UK|United Kingdom|Canada|Germany|France|India|China|Japan|Australia|Europe|Asia|EMEA|London|Toronto|Vancouver|Berlin|Paris|Munich|Bangalore|Beijing|Shanghai|Tokyo|Sydney|Melbourne|Edinburgh|Banbury)\b/i;
+  
+  // First check if it explicitly mentions non-US locations
+  if (nonUSPatterns.test(location)) {
+    return false;
+  }
+  
+  // Then check for US indicators
+  return usStates.test(location) || usPatterns.test(location);
+}
+
+/**
+ * Parses HTML tables from GitHub markdown READMEs to extract job listings.
+ * Handles both 5-column and 6-column table formats.
+ * Filters for US locations only and jobs within MAX_AGE_DAYS.
+ * 
+ * @param html - Raw HTML content containing job tables
+ * @param sourceUrl - Source URL for attribution in job listings
+ * @returns Array of parsed JobListing objects
+ * 
+ * @remarks
+ * - 5 columns: Company, Role, Location, Application, Age
+ * - 6 columns: Company, Role, Location, Terms, Application, Age
+ * - Prefers direct application links over Simplify links
+ * - Combines multiple regex operations for performance
+ */
+function parseHTMLTable(html: string, sourceUrl: string): JobListing[] {
+  const jobs: JobListing[] = [];
+  
+  // Extract all <tr> elements from <tbody>
+  const tbodyMatch = html.match(/<tbody>([\s\S]*?)<\/tbody>/g);
+  if (!tbodyMatch) return jobs;
+  
+  for (const tbody of tbodyMatch) {
+    // Extract all rows
+    const rows = tbody.match(/<tr>([\s\S]*?)<\/tr>/g);
+    if (!rows) continue;
+    
+    for (const row of rows) {
+      // Extract all cells
+      const cells = row.match(/<td[^>]*>([\s\S]*?)<\/td>/g);
+      if (!cells || cells.length < 5) continue;
+      
+      // Clean up cell content
+      const cleanCells = cells.map(cell => {
+        return cell
+          .replace(/<td[^>]*>/, '')
+          .replace(/<\/td>/, '')
+          .trim();
+      });
+      
+      // Handle both 5-column and 6-column tables
+      // 5 columns: Company, Role, Location, Application, Age
+      // 6 columns: Company, Role, Location, Terms, Application, Age
+      const hasTermsColumn = cleanCells.length >= 6;
+      
+      const companyCell = cleanCells[0];
+      const roleCell = cleanCells[1];
+      const locationCell = cleanCells[2];
+      const termsCell = hasTermsColumn ? cleanCells[3] : '';
+      const applicationCell = hasTermsColumn ? cleanCells[4] : cleanCells[3];
+      const ageCell = hasTermsColumn ? cleanCells[5] : cleanCells[4];
+      
+      // Extract company name - combine regex replacements for efficiency
+      let company = companyCell
+        .replace(/<[^>]*>|\[([^\]]+)\]\([^)]+\)|🔥/g, (match, p1) => p1 || '')
+        .trim();
+      
+      // Extract role - combine regex replacements for efficiency
+      let role = roleCell
+        .replace(/<[^>]*>|🎓|🛂|🇺🇸/g, '')
+        .trim();
+      
+      // Extract location - combine regex replacements for efficiency
+      let location = locationCell
+        .replace(/<details>.*?<\/details>|<[^>]*>|<\/br>/g, (match) => match === '</br>' ? ', ' : '')
+        .trim();
+      
+      // Filter for US locations only
+      if (!isUSLocation(location)) {
+        continue;
+      }
+      
+      // Extract age
+      const age = ageCell.replace(/<[^>]*>/g, '').trim();
+      
+      // Check age filter
+      const ageInDays = parseAgeInDays(age);
+      if (ageInDays !== null && ageInDays > CONFIG.MAX_AGE_DAYS) {
+        continue;
+      }
+      
+      // Extract application link
+      const hrefMatches = Array.from(applicationCell.matchAll(/href="([^"]+)"/g));
+      if (hrefMatches.length === 0) continue;
+      
+      // Prefer non-simplify links
+      let applicationLink = '';
+      for (const match of hrefMatches) {
+        const url = match[1];
+        if (!url.includes('simplify.jobs')) {
+          applicationLink = url;
+          break;
+        }
+      }
+      
+      // Fallback to first link
+      if (!applicationLink && hrefMatches.length > 0) {
+        applicationLink = hrefMatches[0][1];
+      }
+      
+      if (!applicationLink) continue;
+      
+      // Extract terms (if available)
+      const terms = termsCell
+        ? termsCell.replace(/<[^>]*>/g, '').trim()
+        : 'N/A';
+      
+      jobs.push({
+        company: company || 'Unknown',
+        role: role || 'Unknown Role',
+        location,
+        terms,
+        applicationLink,
+        age,
+        dateAdded: new Date().toISOString(),
+        source: sourceUrl,
+      });
+    }
+  }
+  
+  return jobs;
+}
+
+/**
+ * Fetches and parses job listings from a GitHub raw content URL.
+ * 
+ * @param sourceUrl - Raw GitHub URL to fetch
+ * @param displayUrl - Human-readable URL for display/logging
+ * @returns Promise resolving to array of JobListing objects
+ * 
+ * @remarks
+ * Includes error handling and returns empty array on failure.
+ * Logs progress and table count for debugging.
+ */
+async function fetchJobsFromGitHub(sourceUrl: string, displayUrl: string): Promise<JobListing[]> {
+  try {
+    console.log(`Fetching ${sourceUrl}...`);
+    
+    const response = await fetch(sourceUrl);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const content = await response.text();
+    
+    // Debug: Check if we have table content
+    const tableCount = (content.match(/<table>/g) || []).length;
+    console.log(`  Found ${tableCount} HTML tables`);
+    
+    const jobs = parseHTMLTable(content, displayUrl);
+    
+    console.log(`✓ Parsed ${jobs.length} US jobs from ${displayUrl}`);
+    return jobs;
+  } catch (error) {
+    console.error(`Error fetching ${sourceUrl}:`, error);
+    return [];
+  }
+}
+
+/**
+ * Main update function that fetches jobs from all configured GitHub sources.
+ * Deduplicates jobs and filters out already-processed applications.
+ * Uses efficient Set-based duplicate detection during insertion (O(n) instead of O(n²)).
+ * 
+ * @returns Promise that resolves when all sources are fetched and database is updated
+ * 
+ * @remarks
+ * Performs duplicate detection at insertion time for better performance.
+ * Tracks statistics separately for each source.
+ */
+async function updateAllSources(): Promise<void> {
   await initializeDataDirectory();
   
   const db = await loadJobsDatabase();
   const processedData = await loadProcessedJobs();
-
-  // Filter out already processed jobs
-  const unprocessedJobs = newJobs.filter(
-    (job) => !processedData.processedLinks.has(job.applicationLink)
-  );
-
-  console.log(`\n${sourceName}:`);
-  console.log(`  New jobs found: ${newJobs.length}`);
-  console.log(`  Already processed: ${newJobs.length - unprocessedJobs.length}`);
-  console.log(`  To be added: ${unprocessedJobs.length}`);
-
-  // Add to unprocessed list
-  db.unprocessed.push(...unprocessedJobs);
   
-  // Remove duplicates based on application link
+  console.log("\n" + "=".repeat(60));
+  console.log("UPDATING JOBS FROM ALL SOURCES");
+  console.log("=".repeat(60));
+  
+  let totalNewJobs = 0;
+  let totalAlreadyProcessed = 0;
+  
+  // Track seen links across all sources for efficient duplicate detection
+  const seenLinks = new Set<string>(db.unprocessed.map(j => j.applicationLink));
+  
+  for (const source of CONFIG.GITHUB_SOURCES) {
+    const jobs = await fetchJobsFromGitHub(source.url, source.displayUrl);
+    
+    let sourceNewJobs = 0;
+    let sourceAlreadyProcessed = 0;
+    
+    // Filter and deduplicate in a single pass
+    for (const job of jobs) {
+      if (processedData.processedLinks.has(job.applicationLink)) {
+        sourceAlreadyProcessed++;
+      } else if (!seenLinks.has(job.applicationLink)) {
+        db.unprocessed.push(job);
+        seenLinks.add(job.applicationLink);
+        sourceNewJobs++;
+      }
+    }
+    
+    console.log(`\n${source.name}:`);
+    console.log(`  New jobs found: ${jobs.length}`);
+    console.log(`  Already processed: ${sourceAlreadyProcessed}`);
+    console.log(`  To be added: ${sourceNewJobs}`);
+    
+    totalNewJobs += sourceNewJobs;
+    totalAlreadyProcessed += sourceAlreadyProcessed;
+  }
+  
+  // No need for separate deduplication - already done above
+  /* Removed inefficient post-processing:
   const seen = new Set<string>();
   db.unprocessed = db.unprocessed.filter((job) => {
-    if (seen.has(job.applicationLink)) return false;
-    seen.add(job.applicationLink);
-    return true;
-  });
-
+  */
+  
   await saveJobsDatabase(db);
+  
+  console.log("\n" + "=".repeat(60));
+  console.log("SUMMARY");
+  console.log("=".repeat(60));
+  console.log(`Total new jobs added: ${totalNewJobs}`);
+  console.log(`Already processed: ${totalAlreadyProcessed}`);
+  console.log(`Total unprocessed jobs: ${db.unprocessed.length}`);
+  console.log("\n✓ Update complete!");
 }
 
+/**
+ * Marks a batch of jobs as processed by moving them from unprocessed to processed lists.
+ * Uses Set for O(1) lookup performance when filtering unprocessed jobs.
+ * 
+ * @param links - Array of application links to mark as processed
+ * @returns Promise that resolves when both databases are updated
+ * 
+ * @remarks
+ * Updates both processed.json and jobs.json atomically.
+ * Uses Set-based filtering for O(n) performance instead of O(n²).
+ */
 async function markJobsAsProcessed(links: string[]): Promise<void> {
   const processedData = await loadProcessedJobs();
   
@@ -236,14 +510,26 @@ async function markJobsAsProcessed(links: string[]): Promise<void> {
   const db = await loadJobsDatabase();
   db.processed.push(...links);
   
-  // Remove from unprocessed
+  // Remove from unprocessed - use Set for O(1) lookups instead of O(n) includes
+  const linksSet = new Set(links);
   db.unprocessed = db.unprocessed.filter(
-    (job) => !links.includes(job.applicationLink)
+    (job) => !linksSet.has(job.applicationLink)
   );
   
   await saveJobsDatabase(db);
 }
 
+/**
+ * Interactive command to review and apply to jobs in batches.
+ * Displays job details, opens applications in browser, and tracks which jobs are processed.
+ * 
+ * @returns Promise that resolves when user finishes processing or quits
+ * 
+ * @remarks
+ * - Supports resuming from a specific index via START_INDEX env variable
+ * - Allows marking jobs as processed without opening ("mark" command)
+ * - Shows progress with batch numbers and job indices
+ */
 async function openJobsInBatches(): Promise<void> {
   const rl = readline.createInterface({ input, output });
 
@@ -327,6 +613,16 @@ async function openJobsInBatches(): Promise<void> {
   }
 }
 
+/**
+ * Splits an array into chunks of specified size.
+ * 
+ * @param arr - Array to split into chunks
+ * @param size - Size of each chunk
+ * @returns Array of arrays, each containing up to 'size' elements
+ * 
+ * @example
+ * chunk([1, 2, 3, 4, 5], 2) // [[1, 2], [3, 4], [5]]
+ */
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) {
@@ -335,15 +631,19 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+/**
+ * Displays help information about available commands and usage.
+ * 
+ * @returns Promise that resolves after help text is printed
+ */
 async function showHelp(): Promise<void> {
   console.log(`
-Job Application Manager
-=======================
+Job Application Manager (Automated)
+====================================
 
 Commands:
   help              Show this help message
-  scraper           Generate browser scraper script
-  update [source]   Update jobs from scraped data (paste JSON)
+  update            Automatically fetch and update jobs from all sources
   apply             Open and process jobs in batches
   stats             Show statistics
   reset             Reset all data (careful!)
@@ -352,13 +652,23 @@ Environment Variables:
   START_INDEX       Resume from specific job index (for 'apply' command)
 
 Examples:
-  bun run job-manager.ts scraper
   bun run job-manager.ts update
   bun run job-manager.ts apply
   START_INDEX=10 bun run job-manager.ts apply
+
+Sources (automatically fetched):
+  - Summer 2026 Internships
+  - New Grad Positions
+  - Off-Season Internships
 `);
 }
 
+/**
+ * Displays statistics about processed and unprocessed jobs.
+ * Shows job counts and source URLs.
+ * 
+ * @returns Promise that resolves after stats are printed
+ */
 async function showStats(): Promise<void> {
   const db = await loadJobsDatabase();
   const processedData = await loadProcessedJobs();
@@ -374,62 +684,21 @@ Total Jobs Tracked:  ${db.unprocessed.length + processedData.totalProcessed}
 Last Updated:        ${processedData.lastUpdated}
 
 Sources:
-  - Summer 2026 Internships: ${CONFIG.GITHUB_SOURCES[0].url}
-  - New Grad Positions:      ${CONFIG.GITHUB_SOURCES[1].url}
-  - Off-Season Internships:  ${CONFIG.GITHUB_SOURCES[2].url}
+  - Summer 2026 Internships: ${CONFIG.GITHUB_SOURCES[0].displayUrl}
+  - New Grad Positions:      ${CONFIG.GITHUB_SOURCES[1].displayUrl}
+  - Off-Season Internships:  ${CONFIG.GITHUB_SOURCES[2].displayUrl}
 `);
 }
 
-async function generateScraper(): Promise<void> {
-  const script = generateScraperScript(CONFIG.MAX_AGE_DAYS);
-  
-  console.log("\n" + "=".repeat(70));
-  console.log("BROWSER SCRAPER SCRIPT");
-  console.log("=".repeat(70));
-  console.log("\nInstructions:");
-  console.log("1. Navigate to one of these URLs:");
-  CONFIG.GITHUB_SOURCES.forEach((source) => {
-    console.log(`   - ${source.url}`);
-  });
-  console.log("2. Open browser Developer Console (F12)");
-  console.log("3. Copy and paste the script below");
-  console.log("4. Copy the JSON output");
-  console.log("5. Run: bun run job-manager.ts update");
-  console.log("6. Paste the JSON when prompted");
-  console.log("\n" + "=".repeat(70));
-  console.log(script);
-  console.log("=".repeat(70) + "\n");
-}
-
-async function updateFromScrapedData(): Promise<void> {
-  const rl = readline.createInterface({ input, output });
-
-  try {
-    console.log("\nPaste the JSON data from browser scraper (press Ctrl+D when done):");
-    
-    let jsonData = "";
-    for await (const line of rl) {
-      jsonData += line;
-    }
-
-    const jobs: JobListing[] = JSON.parse(jsonData);
-    
-    if (!Array.isArray(jobs)) {
-      throw new Error("Invalid JSON format");
-    }
-
-    const sourceName = jobs[0]?.source || "Unknown Source";
-    await updateJobsFromSource(sourceName, jobs);
-    
-    console.log("\n✓ Successfully updated jobs database!");
-    await showStats();
-  } catch (error) {
-    console.error("Error parsing JSON:", error);
-  } finally {
-    rl.close();
-  }
-}
-
+/**
+ * Resets all job data after user confirmation.
+ * Clears both the jobs database and processed jobs tracking.
+ * 
+ * @returns Promise that resolves after data is reset or user cancels
+ * 
+ * @remarks
+ * Requires explicit "yes" confirmation to prevent accidental data loss.
+ */
 async function resetData(): Promise<void> {
   const rl = readline.createInterface({ input, output });
   
@@ -464,6 +733,14 @@ async function resetData(): Promise<void> {
   }
 }
 
+/**
+ * Main entry point for the application.
+ * Routes to appropriate command handler based on argv.
+ * 
+ * @remarks
+ * Available commands: help, update, apply, stats, reset
+ * Exits with code 1 on unknown command.
+ */
 async function main() {
   await initializeDataDirectory();
 
@@ -473,11 +750,8 @@ async function main() {
     case "help":
       await showHelp();
       break;
-    case "scraper":
-      await generateScraper();
-      break;
     case "update":
-      await updateFromScrapedData();
+      await updateAllSources();
       break;
     case "apply":
       await openJobsInBatches();
