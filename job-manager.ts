@@ -1,73 +1,96 @@
+import { checkbox, confirm } from "@inquirer/prompts";
+import chalk from "chalk";
+import ms from "ms";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { stdin as input, stdout as output } from "node:process";
 import readline from "node:readline/promises";
+import ora from "ora";
 
 /**
  * Represents a job listing parsed from GitHub repositories.
- * Contains all relevant information about a job posting including company, role, and application details.
  */
 interface JobListing {
-  /** Company name offering the position */
   company: string;
-  /** Job role/title */
   role: string;
-  /** Job location(s) - filtered to US only */
   location: string;
-  /** Employment terms (e.g., "Spring 2026", "Fall 2025") or "N/A" if not specified */
   terms: string;
-  /** Direct link to the job application */
   applicationLink: string;
-  /** Age of the posting (e.g., "5d", "2mo") */
   age: string;
-  /** ISO timestamp when the job was added to our database */
   dateAdded: string;
-  /** Source URL where this job was found */
   source: string;
 }
 
 /**
- * Tracks which job applications have been processed to prevent duplicates.
- * Uses a Set for O(1) lookup performance.
+ * Tracks processed applications.
  */
 interface ProcessedJobsData {
-  /** Set of application links that have already been processed */
   processedLinks: Set<string>;
-  /** ISO timestamp of the last update */
   lastUpdated: string;
-  /** Total count of processed jobs */
   totalProcessed: number;
 }
 
 /**
- * Main database structure for storing job listings.
- * Separates unprocessed jobs from processed ones for efficient workflow management.
+ * Main database structure.
+ * Now includes currentIndex to remember user position.
  */
 interface JobsDatabase {
-  /** Array of jobs that haven't been reviewed/applied to yet */
   unprocessed: JobListing[];
-  /** Array of application links that have been processed */
   processed: string[];
-  /** Metadata about data sources */
+  /** Remembers where the user left off in the unprocessed list */
+  currentIndex: number;
   sources: {
-    /** Last update info for Summer 2026 internships */
     summer2026Internships: string;
-    /** Last update info for new grad positions */
     newGrad: string;
-    /** Last update info for off-season internships */
     offSeason: string;
   };
 }
 
 /**
- * Application configuration constants.
- * Controls batch sizes, file paths, data sources, and filtering criteria.
+ * User preferences for filtering job titles.
  */
+interface UserPreferences {
+  acceptedTitles: Set<string>;
+  rejectedTitles: Set<string>;
+  presets?: FilterPreset[];
+}
+
+/**
+ * Named filter presets for quick switching
+ */
+interface FilterPreset {
+  name: string;
+  acceptedTitles: string[];
+  rejectedTitles: string[];
+  createdAt: string;
+}
+
+/**
+ * Session statistics tracking
+ */
+interface SessionStats {
+  startTime: number;
+  jobsViewed: number;
+  jobsMarked: number;
+  batchesProcessed: number;
+}
+
+/**
+ * Undo operation data
+ */
+interface UndoOperation {
+  type: 'mark_batch' | 'mark_single';
+  links: string[];
+  timestamp: number;
+}
+
 const CONFIG = {
   BATCH_SIZE: 5,
   DATA_DIR: "./job-data",
   JOBS_FILE: "./job-data/jobs.json",
   PROCESSED_FILE: "./job-data/processed.json",
+  PREFERENCES_FILE: "./job-data/preferences.json",
+  EXPORTS_DIR: "./job-data/exports",
   GITHUB_SOURCES: [
     {
       name: "summer2026Internships",
@@ -91,12 +114,12 @@ const CONFIG = {
   MAX_AGE_DAYS: 30,
 } as const;
 
-/**
- * Initializes the data directory if it doesn't exist.
- * Creates the directory structure needed for storing job data.
- * 
- * @returns Promise that resolves when directory is created or already exists
- */
+// Session state (not persisted)
+let currentSession: SessionStats | null = null;
+let lastUndoOperation: UndoOperation | null = null;
+
+// --- FILE SYSTEM HELPERS ---
+
 async function initializeDataDirectory(): Promise<void> {
   if (!existsSync(CONFIG.DATA_DIR)) {
     await mkdir(CONFIG.DATA_DIR, { recursive: true });
@@ -104,12 +127,30 @@ async function initializeDataDirectory(): Promise<void> {
   }
 }
 
-/**
- * Loads the list of previously processed job applications from disk.
- * Returns a fresh data structure if the file doesn't exist or can't be read.
- * 
- * @returns Promise resolving to ProcessedJobsData with Set of processed links
- */
+async function loadUserPreferences(): Promise<UserPreferences> {
+  try {
+    if (existsSync(CONFIG.PREFERENCES_FILE)) {
+      const data = await readFile(CONFIG.PREFERENCES_FILE, "utf-8");
+      const parsed = JSON.parse(data);
+      return {
+        acceptedTitles: new Set(parsed.acceptedTitles || []),
+        rejectedTitles: new Set(parsed.rejectedTitles || []),
+      };
+    }
+  } catch (error) {
+    // Ignore error
+  }
+  return { acceptedTitles: new Set(), rejectedTitles: new Set() };
+}
+
+async function saveUserPreferences(prefs: UserPreferences): Promise<void> {
+  const serializable = {
+    acceptedTitles: Array.from(prefs.acceptedTitles),
+    rejectedTitles: Array.from(prefs.rejectedTitles),
+  };
+  await writeFile(CONFIG.PREFERENCES_FILE, JSON.stringify(serializable, null, 2), "utf-8");
+}
+
 async function loadProcessedJobs(): Promise<ProcessedJobsData> {
   try {
     if (existsSync(CONFIG.PROCESSED_FILE)) {
@@ -122,44 +163,20 @@ async function loadProcessedJobs(): Promise<ProcessedJobsData> {
       };
     }
   } catch (error) {
-    console.warn("Could not load processed jobs, starting fresh");
+    // Ignore
   }
-
-  return {
-    processedLinks: new Set(),
-    lastUpdated: new Date().toISOString(),
-    totalProcessed: 0,
-  };
+  return { processedLinks: new Set(), lastUpdated: new Date().toISOString(), totalProcessed: 0 };
 }
 
-/**
- * Persists processed jobs data to disk.
- * Converts Set to Array for JSON serialization.
- * 
- * @param data - The processed jobs data to save
- * @returns Promise that resolves when data is written to disk
- */
 async function saveProcessedJobs(data: ProcessedJobsData): Promise<void> {
   const serializable = {
     processedLinks: Array.from(data.processedLinks),
     lastUpdated: new Date().toISOString(),
     totalProcessed: data.totalProcessed,
   };
-
-  await writeFile(
-    CONFIG.PROCESSED_FILE,
-    JSON.stringify(serializable, null, 2),
-    "utf-8"
-  );
-  console.log(`Saved ${data.totalProcessed} processed jobs to ${CONFIG.PROCESSED_FILE}`);
+  await writeFile(CONFIG.PROCESSED_FILE, JSON.stringify(serializable, null, 2), "utf-8");
 }
 
-/**
- * Loads the main jobs database from disk.
- * Returns an empty database structure if file doesn't exist or can't be read.
- * 
- * @returns Promise resolving to JobsDatabase with unprocessed and processed jobs
- */
 async function loadJobsDatabase(): Promise<JobsDatabase> {
   try {
     if (existsSync(CONFIG.JOBS_FILE)) {
@@ -167,140 +184,104 @@ async function loadJobsDatabase(): Promise<JobsDatabase> {
       return JSON.parse(data);
     }
   } catch (error) {
-    console.warn("Could not load jobs database, starting fresh");
+    // Ignore
   }
-
   return {
     unprocessed: [],
     processed: [],
-    sources: {
-      summer2026Internships: "",
-      newGrad: "",
-      offSeason: "",
-    },
+    currentIndex: 0,
+    sources: { summer2026Internships: "", newGrad: "", offSeason: "" },
   };
 }
 
-/**
- * Persists the jobs database to disk.
- * 
- * @param db - The jobs database to save
- * @returns Promise that resolves when database is written to disk
- */
 async function saveJobsDatabase(db: JobsDatabase): Promise<void> {
   await writeFile(CONFIG.JOBS_FILE, JSON.stringify(db, null, 2), "utf-8");
-  console.log(`Saved ${db.unprocessed.length} unprocessed jobs to ${CONFIG.JOBS_FILE}`);
 }
 
-/**
- * Parses age text like "5d", "2mo", "1w" into number of days.
- * Used to filter out jobs older than MAX_AGE_DAYS.
- * 
- * @param ageText - Age string from job posting (e.g., "5d", "2mo", "1w")
- * @returns Number of days, or null if unable to parse
- * 
- * @example
- * parseAgeInDays("5d")   // returns 5
- * parseAgeInDays("2mo")  // returns 60
- * parseAgeInDays("1w")   // returns 7
- */
+// --- PARSING HELPERS ---
+
 function parseAgeInDays(ageText: string): number | null {
   const trimmed = ageText.trim().toLowerCase();
-  
-  // Match patterns like "5d", "2mo", "1w"
   const match = trimmed.match(/(\d+)\s*(d|day|days|mo|month|months|w|week|weeks)/i);
-  
   if (!match) return null;
-  
   const value = parseInt(match[1]);
   const unit = match[2].toLowerCase();
-  
-  if (unit.startsWith('d')) {
-    return value;
-  } else if (unit.startsWith('mo')) {
-    return value * 30;
-  } else if (unit.startsWith('w')) {
-    return value * 7;
-  }
-  
+  if (unit.startsWith('d')) return value;
+  if (unit.startsWith('mo')) return value * 30;
+  if (unit.startsWith('w')) return value * 7;
   return null;
 }
 
-/**
- * Determines if a location string represents a US location.
- * Checks for US state abbreviations, common US patterns, and excludes non-US countries.
- * 
- * @param location - Location string from job posting
- * @returns true if location is in the US, false otherwise
- * 
- * @example
- * isUSLocation("New York, NY")           // true
- * isUSLocation("Remote - USA")           // true
- * isUSLocation("London, UK")             // false
- * isUSLocation("Toronto, Canada")        // false
- */
 function isUSLocation(location: string): boolean {
-  // US state abbreviations (includes DC and territories)
   const usStates = /\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC|PR|VI|GU|AS|MP)\b/i;
-  
-  // Common US city patterns or "USA" mentions
   const usPatterns = /\b(USA|United States|U\.S\.|Remote.*USA?|Nationwide)\b/i;
-  
-  // Exclude non-US countries/regions
   const nonUSPatterns = /\b(UK|United Kingdom|Canada|Germany|France|India|China|Japan|Australia|Europe|Asia|EMEA|London|Toronto|Vancouver|Berlin|Paris|Munich|Bangalore|Beijing|Shanghai|Tokyo|Sydney|Melbourne|Edinburgh|Banbury)\b/i;
   
-  // First check if it explicitly mentions non-US locations
-  if (nonUSPatterns.test(location)) {
-    return false;
-  }
-  
-  // Then check for US indicators
+  if (nonUSPatterns.test(location)) return false;
   return usStates.test(location) || usPatterns.test(location);
 }
 
 /**
- * Parses HTML tables from GitHub markdown READMEs to extract job listings.
- * Handles both 5-column and 6-column table formats.
- * Filters for US locations only and jobs within MAX_AGE_DAYS.
- * 
- * @param html - Raw HTML content containing job tables
- * @param sourceUrl - Source URL for attribution in job listings
- * @returns Array of parsed JobListing objects
- * 
- * @remarks
- * - 5 columns: Company, Role, Location, Application, Age
- * - 6 columns: Company, Role, Location, Terms, Application, Age
- * - Prefers direct application links over Simplify links
- * - Combines multiple regex operations for performance
+ * Extracts normalized keywords from job titles for grouping.
  */
+function extractRoleKeywords(role: string): string[] {
+  const normalized = role.toLowerCase();
+  const keywords: string[] = [];
+  
+  const rolePatterns = [
+    /software engineer/i, /backend/i, /frontend/i, /full[- ]?stack/i, /mobile/i,
+    /ios/i, /android/i, /web/i, /machine learning/i, /\bml\b/i, /\bai\b/i,
+    /data scien/i, /data engineer/i, /devops/i, /sre/i, /cloud/i, /security/i,
+    /embedded/i, /firmware/i, /qa/i, /test/i, /product manager/i, /\bpm\b/i,
+    /quant/i, /hardware/i, /intern/i, /new grad/i, /research/i
+  ];
+  
+  for (const pattern of rolePatterns) {
+    if (pattern.test(normalized)) {
+      // Clean up the regex source to look nice
+      const cleanName = pattern.source.replace(/\\b/g, '').replace(/\\/g, '').replace(/\[.*?\]/g, '');
+      keywords.push(cleanName);
+    }
+  }
+  return keywords;
+}
+
+/**
+ * Checks if a job title passes the user's preference filters.
+ */
+function matchesPreferences(role: string, prefs: UserPreferences): boolean {
+  const normalized = role.toLowerCase();
+  
+  // 1. Check Rejections first (Strict filter)
+  for (const rejected of prefs.rejectedTitles) {
+    if (normalized.includes(rejected.toLowerCase())) return false;
+  }
+  
+  // 2. If Accepted list is empty, allow everything (that wasn't rejected)
+  if (prefs.acceptedTitles.size === 0) return true;
+  
+  // 3. If Accepted list exists, must match at least one
+  for (const accepted of prefs.acceptedTitles) {
+    if (normalized.includes(accepted.toLowerCase())) return true;
+  }
+  
+  return false;
+}
+
 function parseHTMLTable(html: string, sourceUrl: string): JobListing[] {
   const jobs: JobListing[] = [];
-  
-  // Extract all <tr> elements from <tbody>
   const tbodyMatch = html.match(/<tbody>([\s\S]*?)<\/tbody>/g);
   if (!tbodyMatch) return jobs;
   
   for (const tbody of tbodyMatch) {
-    // Extract all rows
     const rows = tbody.match(/<tr>([\s\S]*?)<\/tr>/g);
     if (!rows) continue;
     
     for (const row of rows) {
-      // Extract all cells
       const cells = row.match(/<td[^>]*>([\s\S]*?)<\/td>/g);
       if (!cells || cells.length < 5) continue;
       
-      // Clean up cell content
-      const cleanCells = cells.map(cell => {
-        return cell
-          .replace(/<td[^>]*>/, '')
-          .replace(/<\/td>/, '')
-          .trim();
-      });
-      
-      // Handle both 5-column and 6-column tables
-      // 5 columns: Company, Role, Location, Application, Age
-      // 6 columns: Company, Role, Location, Terms, Application, Age
+      const cleanCells = cells.map(cell => cell.replace(/<td[^>]*>/, '').replace(/<\/td>/, '').trim());
       const hasTermsColumn = cleanCells.length >= 6;
       
       const companyCell = cleanCells[0];
@@ -310,60 +291,30 @@ function parseHTMLTable(html: string, sourceUrl: string): JobListing[] {
       const applicationCell = hasTermsColumn ? cleanCells[4] : cleanCells[3];
       const ageCell = hasTermsColumn ? cleanCells[5] : cleanCells[4];
       
-      // Extract company name - combine regex replacements for efficiency
-      let company = companyCell
-        .replace(/<[^>]*>|\[([^\]]+)\]\([^)]+\)|🔥/g, (match, p1) => p1 || '')
-        .trim();
+      let company = companyCell.replace(/<[^>]*>|\[([^\]]+)\]\([^)]+\)|🔥/g, (match, p1) => p1 || '').trim();
+      let role = roleCell.replace(/<[^>]*>|🎓|🛂|🇺🇸/g, '').trim();
+      let location = locationCell.replace(/<details>.*?<\/details>|<[^>]*>|<\/br>/g, (match) => match === '</br>' ? ', ' : '').trim();
       
-      // Extract role - combine regex replacements for efficiency
-      let role = roleCell
-        .replace(/<[^>]*>|🎓|🛂|🇺🇸/g, '')
-        .trim();
+      if (!isUSLocation(location)) continue;
       
-      // Extract location - combine regex replacements for efficiency
-      let location = locationCell
-        .replace(/<details>.*?<\/details>|<[^>]*>|<\/br>/g, (match) => match === '</br>' ? ', ' : '')
-        .trim();
-      
-      // Filter for US locations only
-      if (!isUSLocation(location)) {
-        continue;
-      }
-      
-      // Extract age
       const age = ageCell.replace(/<[^>]*>/g, '').trim();
-      
-      // Check age filter
       const ageInDays = parseAgeInDays(age);
-      if (ageInDays !== null && ageInDays > CONFIG.MAX_AGE_DAYS) {
-        continue;
-      }
+      if (ageInDays !== null && ageInDays > CONFIG.MAX_AGE_DAYS) continue;
       
-      // Extract application link
       const hrefMatches = Array.from(applicationCell.matchAll(/href="([^"]+)"/g));
       if (hrefMatches.length === 0) continue;
       
-      // Prefer non-simplify links
       let applicationLink = '';
       for (const match of hrefMatches) {
-        const url = match[1];
-        if (!url.includes('simplify.jobs')) {
-          applicationLink = url;
+        if (!match[1].includes('simplify.jobs')) {
+          applicationLink = match[1];
           break;
         }
       }
-      
-      // Fallback to first link
-      if (!applicationLink && hrefMatches.length > 0) {
-        applicationLink = hrefMatches[0][1];
-      }
-      
+      if (!applicationLink && hrefMatches.length > 0) applicationLink = hrefMatches[0][1];
       if (!applicationLink) continue;
       
-      // Extract terms (if available)
-      const terms = termsCell
-        ? termsCell.replace(/<[^>]*>/g, '').trim()
-        : 'N/A';
+      const terms = termsCell ? termsCell.replace(/<[^>]*>/g, '').trim() : 'N/A';
       
       jobs.push({
         company: company || 'Unknown',
@@ -377,399 +328,905 @@ function parseHTMLTable(html: string, sourceUrl: string): JobListing[] {
       });
     }
   }
-  
   return jobs;
 }
 
-/**
- * Fetches and parses job listings from a GitHub raw content URL.
- * 
- * @param sourceUrl - Raw GitHub URL to fetch
- * @param displayUrl - Human-readable URL for display/logging
- * @returns Promise resolving to array of JobListing objects
- * 
- * @remarks
- * Includes error handling and returns empty array on failure.
- * Logs progress and table count for debugging.
- */
 async function fetchJobsFromGitHub(sourceUrl: string, displayUrl: string): Promise<JobListing[]> {
+  const spinner = ora(`Fetching ${displayUrl}...`).start();
+  
   try {
-    console.log(`Fetching ${sourceUrl}...`);
-    
     const response = await fetch(sourceUrl);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const content = await response.text();
-    
-    // Debug: Check if we have table content
-    const tableCount = (content.match(/<table>/g) || []).length;
-    console.log(`  Found ${tableCount} HTML tables`);
-    
     const jobs = parseHTMLTable(content, displayUrl);
     
-    console.log(`✓ Parsed ${jobs.length} US jobs from ${displayUrl}`);
+    spinner.succeed(`Found ${chalk.bold.green(jobs.length)} jobs from ${displayUrl}`);
     return jobs;
   } catch (error) {
-    console.error(`Error fetching ${sourceUrl}:`, error);
+    spinner.fail(`Failed to fetch ${displayUrl}`);
+  console.error(chalk.red(`Error: ${error}`));
     return [];
   }
 }
 
+// --- UTILITY FUNCTIONS ---
+
 /**
- * Main update function that fetches jobs from all configured GitHub sources.
- * Deduplicates jobs and filters out already-processed applications.
- * Uses efficient Set-based duplicate detection during insertion (O(n) instead of O(n²)).
- * 
- * @returns Promise that resolves when all sources are fetched and database is updated
- * 
- * @remarks
- * Performs duplicate detection at insertion time for better performance.
- * Tracks statistics separately for each source.
+ * Convert age string to relative time
  */
+function getRelativeTime(ageText: string): string {
+  const days = parseAgeInDays(ageText);
+  if (days === null) return ageText;
+  
+  const msAgo = days * 24 * 60 * 60 * 1000;
+  return ms(msAgo, { long: true }) + ' ago';
+}
+
+/**
+ * Initialize session tracking
+ */
+function startSession(): void {
+  currentSession = {
+    startTime: Date.now(),
+    jobsViewed: 0,
+    jobsMarked: 0,
+    batchesProcessed: 0,
+  };
+}
+
+/**
+ * Display session summary
+ */
+function showSessionSummary(): void {
+  if (!currentSession) return;
+  
+  const duration = Date.now() - currentSession.startTime;
+  const durationStr = ms(duration, { long: true });
+  
+  console.log("\\n" + chalk.bold.magenta("╔" + "═".repeat(58) + "╗"));
+  console.log(chalk.bold.magenta("║") + chalk.bold.white(" 📊  SESSION SUMMARY".padEnd(58)) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("╠" + "═".repeat(58) + "╣"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Duration:            ${chalk.cyan(durationStr)}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Jobs Viewed:         ${chalk.yellow(currentSession.jobsViewed)}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Jobs Marked:         ${chalk.green(currentSession.jobsMarked)}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Batches Processed:   ${chalk.blue(currentSession.batchesProcessed)}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("╚" + "═".repeat(58) + "╝"));
+  console.log("");
+}
+
+/**
+ * Export jobs to CSV
+ */
+async function exportToCSV(jobs: JobListing[], filename: string): Promise<void> {
+  if (!existsSync(CONFIG.EXPORTS_DIR)) {
+    await mkdir(CONFIG.EXPORTS_DIR, { recursive: true });
+  }
+  
+  const headers = "Company,Role,Location,Terms,Age,Application Link,Source\\n";
+  const rows = jobs.map(job => {
+    const escape = (str: string) => `"${str.replace(/"/g, '""')}"`;
+    return [
+      escape(job.company),
+      escape(job.role),
+      escape(job.location),
+      escape(job.terms),
+      escape(job.age),
+      escape(job.applicationLink),
+      escape(job.source),
+    ].join(',');
+  }).join('\\n');
+  
+  const filepath = `${CONFIG.EXPORTS_DIR}/${filename}`;
+  await writeFile(filepath, headers + rows, 'utf-8');
+  console.log(chalk.green(`\\n✓ Exported ${jobs.length} jobs to ${filepath}`));
+}
+
+/**
+ * Export jobs to JSON
+ */
+async function exportToJSON(jobs: JobListing[], filename: string): Promise<void> {
+  if (!existsSync(CONFIG.EXPORTS_DIR)) {
+    await mkdir(CONFIG.EXPORTS_DIR, { recursive: true });
+  }
+  
+  const data = {
+    exportedAt: new Date().toISOString(),
+    totalJobs: jobs.length,
+    jobs,
+  };
+  
+  const filepath = `${CONFIG.EXPORTS_DIR}/${filename}`;
+  await writeFile(filepath, JSON.stringify(data, null, 2), 'utf-8');
+  console.log(chalk.green(`\\n✓ Exported ${jobs.length} jobs to ${filepath}`));
+}
+
+/**
+ * Calculate job analytics/insights
+ */
+function analyzeJobs(jobs: JobListing[]): void {
+  if (jobs.length === 0) return;
+  
+  // Location analysis
+  const locationCounts = new Map<string, number>();
+  jobs.forEach(job => {
+    const loc = job.location.split(',')[0].trim(); // First part
+    locationCounts.set(loc, (locationCounts.get(loc) || 0) + 1);
+  });
+  
+  // Company analysis
+  const companyCounts = new Map<string, number>();
+  jobs.forEach(job => {
+    companyCounts.set(job.company, (companyCounts.get(job.company) || 0) + 1);
+  });
+  
+  // Role analysis
+  const roleKeywords = new Map<string, number>();
+  jobs.forEach(job => {
+    const keywords = extractRoleKeywords(job.role);
+    keywords.forEach(kw => {
+      roleKeywords.set(kw, (roleKeywords.get(kw) || 0) + 1);
+    });
+  });
+  
+  // Calculate average age
+  const ages = jobs.map(j => parseAgeInDays(j.age)).filter(a => a !== null) as number[];
+  const avgAge = ages.length > 0 ? Math.round(ages.reduce((a, b) => a + b, 0) / ages.length) : 0;
+  
+  // Top 5 of each
+  const topLocations = Array.from(locationCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  const topCompanies = Array.from(companyCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  const topRoles = Array.from(roleKeywords.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  
+  console.log("\\n" + chalk.bold.cyan("╔" + "═".repeat(58) + "╗"));
+  console.log(chalk.bold.cyan("║") + chalk.bold.white(" 📈  JOB INSIGHTS & ANALYTICS".padEnd(58)) + chalk.bold.cyan("║"));
+  console.log(chalk.bold.cyan("╠" + "═".repeat(58) + "╣"));
+  console.log(chalk.bold.cyan("║") + chalk.bold.yellow(" Top Locations:".padEnd(58)) + chalk.bold.cyan("║"));
+  topLocations.forEach(([loc, count]) => {
+    const pct = ((count / jobs.length) * 100).toFixed(1);
+    console.log(chalk.bold.cyan("║") + chalk.white(`   ${loc.padEnd(35)} ${chalk.cyan(count)} (${chalk.yellow(pct + '%')})`).padEnd(67) + chalk.bold.cyan("║"));
+  });
+  console.log(chalk.bold.cyan("║") + " ".repeat(58) + chalk.bold.cyan("║"));
+  console.log(chalk.bold.cyan("║") + chalk.bold.green(" Top Companies:".padEnd(58)) + chalk.bold.cyan("║"));
+  topCompanies.forEach(([company, count]) => {
+    console.log(chalk.bold.cyan("║") + chalk.white(`   ${company.slice(0, 35).padEnd(35)} ${chalk.green(count)} jobs`).padEnd(67) + chalk.bold.cyan("║"));
+  });
+  console.log(chalk.bold.cyan("║") + " ".repeat(58) + chalk.bold.cyan("║"));
+  console.log(chalk.bold.cyan("║") + chalk.bold.magenta(" Top Role Types:".padEnd(58)) + chalk.bold.cyan("║"));
+  topRoles.forEach(([role, count]) => {
+    console.log(chalk.bold.cyan("║") + chalk.white(`   ${role.padEnd(35)} ${chalk.magenta(count)}`).padEnd(67) + chalk.bold.cyan("║"));
+  });
+  console.log(chalk.bold.cyan("║") + " ".repeat(58) + chalk.bold.cyan("║"));
+  console.log(chalk.bold.cyan("║") + chalk.white(`  Average Posting Age: ${chalk.yellow(avgAge + ' days')}`).padEnd(67) + chalk.bold.cyan("║"));
+  console.log(chalk.bold.cyan("╚" + "═".repeat(58) + "╝"));
+  console.log("");
+}
+
+/**
+ * Save undo operation for potential reversal
+ */
+function saveUndoOperation(type: UndoOperation['type'], links: string[]): void {
+  lastUndoOperation = {
+    type,
+    links,
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * Perform undo of last operation
+ */
+async function performUndo(): Promise<boolean> {
+  if (!lastUndoOperation) {
+    console.log(chalk.yellow("\\n⚠ No operation to undo."));
+    return false;
+  }
+  
+  const age = Date.now() - lastUndoOperation.timestamp;
+  if (age > 60000) { // 1 minute timeout
+    console.log(chalk.yellow("\\n⚠ Undo expired (>1 minute old)."));
+    lastUndoOperation = null;
+    return false;
+  }
+  
+  // Restore jobs by removing from processed and adding back to unprocessed
+  const processedData = await loadProcessedJobs();
+  const db = await loadJobsDatabase();
+  
+  // Remove from processed
+  lastUndoOperation.links.forEach(link => {
+    processedData.processedLinks.delete(link);
+  });
+  processedData.totalProcessed = processedData.processedLinks.size;
+  await saveProcessedJobs(processedData);
+  
+  // Note: We don't re-add to unprocessed because they should still be in the original fetch
+  // Just removing from processed is enough
+  
+  console.log(chalk.green(`\n✓ Undid marking of ${lastUndoOperation.links.length} job(s).`));
+  const undoneCount = lastUndoOperation.links.length;
+  lastUndoOperation = null;
+  
+  if (currentSession) {
+    currentSession.jobsMarked -= undoneCount;
+  }
+  
+  return true;
+}
+
+/**
+ * Save a filter preset
+ */
+async function saveFilterPreset(name: string, prefs: UserPreferences): Promise<void> {
+  const preset: FilterPreset = {
+    name,
+    acceptedTitles: Array.from(prefs.acceptedTitles),
+    rejectedTitles: Array.from(prefs.rejectedTitles),
+    createdAt: new Date().toISOString(),
+  };
+  
+  if (!prefs.presets) {
+    prefs.presets = [];
+  }
+  
+  // Replace if exists
+  const existingIndex = prefs.presets.findIndex(p => p.name === name);
+  if (existingIndex >= 0) {
+    prefs.presets[existingIndex] = preset;
+  } else {
+    prefs.presets.push(preset);
+  }
+  
+  await saveUserPreferences(prefs);
+  console.log(chalk.green(`\\n✓ Saved filter preset: "${name}"`));
+}
+
+/**
+ * Load a filter preset
+ */
+async function loadFilterPreset(name: string): Promise<UserPreferences | null> {
+  const prefs = await loadUserPreferences();
+  
+  if (!prefs.presets) {
+    console.log(chalk.yellow("\\n⚠ No presets found."));
+    return null;
+  }
+  
+  const preset = prefs.presets.find(p => p.name === name);
+  if (!preset) {
+    console.log(chalk.yellow(`\\n⚠ Preset "${name}" not found.`));
+    return null;
+  }
+  
+  prefs.acceptedTitles = new Set(preset.acceptedTitles);
+  prefs.rejectedTitles = new Set(preset.rejectedTitles);
+  
+  await saveUserPreferences(prefs);
+  console.log(chalk.green(`\\n✓ Loaded filter preset: "${name}"`));
+  
+  return prefs;
+}
+
+/**
+ * List all filter presets
+ */
+async function listFilterPresets(): Promise<void> {
+  const prefs = await loadUserPreferences();
+  
+  if (!prefs.presets || prefs.presets.length === 0) {
+    console.log(chalk.yellow("\\nNo saved presets."));
+    return;
+  }
+  
+  console.log("\\n" + chalk.bold.blue("Saved Filter Presets:"));
+  prefs.presets.forEach((preset, idx) => {
+    console.log(chalk.cyan(`  ${idx + 1}. ${chalk.bold(preset.name)}`));
+    console.log(chalk.gray(`     Accepted: ${preset.acceptedTitles.length}, Rejected: ${preset.rejectedTitles.length}`));
+    console.log(chalk.gray(`     Created: ${new Date(preset.createdAt).toLocaleDateString()}`));
+  });
+  console.log("");
+}
+
+// --- NEW FEATURE: DYNAMIC TITLE GROUPING ---
+
+/**
+ * Analyzes jobs and presents interactive title selection to user
+ */
+async function promptForTitlePreferences(jobs: JobListing[]): Promise<UserPreferences> {
+  const prefs = await loadUserPreferences();
+  
+  // Extract and count role keywords
+  const keywordCounts = new Map<string, number>();
+  for (const job of jobs) {
+    const keywords = extractRoleKeywords(job.role);
+    for (const keyword of keywords) {
+      keywordCounts.set(keyword, (keywordCounts.get(keyword) || 0) + 1);
+    }
+  }
+  
+  // Sort by frequency
+  const sortedKeywords = Array.from(keywordCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 25); // Top 25 most common
+  
+  if (sortedKeywords.length === 0) {
+    return prefs;
+  }
+  
+  console.log("\n" + chalk.cyan("═".repeat(60)));
+  console.log(chalk.bold.cyan("🎯  JOB TITLE FILTER CONFIGURATION"));
+  console.log(chalk.cyan("═".repeat(60)));
+  console.log(chalk.white(`Found ${chalk.bold.yellow(sortedKeywords.length)} common role types\n`));
+  
+  // Show current preferences
+  if (prefs.acceptedTitles.size > 0 || prefs.rejectedTitles.size > 0) {
+    console.log(chalk.bold.white("Current Filters:"));
+    if (prefs.acceptedTitles.size > 0) {
+      console.log(chalk.green(`  ✓ Accepted: ${Array.from(prefs.acceptedTitles).join(', ')}`));
+    }
+    if (prefs.rejectedTitles.size > 0) {
+      console.log(chalk.red(`  ✗ Rejected: ${Array.from(prefs.rejectedTitles).join(', ')}`));
+    }
+    console.log("");
+  }
+  
+  // Ask if user wants to update
+  const shouldUpdate = await confirm({
+    message: "Update title filters?",
+    default: prefs.acceptedTitles.size === 0 && prefs.rejectedTitles.size === 0,
+  });
+  
+  if (!shouldUpdate) {
+    return prefs;
+  }
+  
+  // Create choices with frequency counts
+  const choices = sortedKeywords.map(([keyword, count]) => ({
+    name: `${keyword} (${count} jobs)`,
+    value: keyword,
+    checked: false,
+  }));
+  
+  console.log(chalk.gray("\n💡 Tip: Use ") + chalk.bold.white("↑/↓") + chalk.gray(" to navigate, ") + chalk.bold.white("Space") + chalk.gray(" to select, ") + chalk.bold.white("Enter") + chalk.gray(" to confirm, ") + chalk.bold.white("a") + chalk.gray(" to toggle all\n"));
+  
+  // ACCEPTED TITLES - Multi-select
+  const acceptedChoices = choices.map(c => ({
+    ...c,
+    checked: prefs.acceptedTitles.has(c.value),
+  }));
+  
+  const acceptedTitles = await checkbox({
+    message: "Select job titles to ACCEPT (leave empty to accept all):",
+    choices: acceptedChoices,
+    pageSize: 15,
+  });
+  
+  // REJECTED TITLES - Multi-select
+  const rejectedChoices = choices.map(c => ({
+    ...c,
+    checked: prefs.rejectedTitles.has(c.value),
+  }));
+  
+  const rejectedTitles = await checkbox({
+    message: "Select job titles to REJECT (these will be filtered out):",
+    choices: rejectedChoices,
+    pageSize: 15,
+  });
+  
+  // Update preferences
+  prefs.acceptedTitles = new Set(acceptedTitles);
+  prefs.rejectedTitles = new Set(rejectedTitles);
+  
+  await saveUserPreferences(prefs);
+  
+  // Show summary
+  console.log("\n" + chalk.green("─".repeat(60)));
+  console.log(chalk.bold.green("✓ Filters Updated:"));
+  if (acceptedTitles.length > 0) {
+    console.log(chalk.green(`  ✓ Accepting: `) + chalk.white(acceptedTitles.join(', ')));
+  } else {
+    console.log(chalk.green(`  ✓ Accepting: `) + chalk.yellow(`ALL (no whitelist)`));
+  }
+  if (rejectedTitles.length > 0) {
+    console.log(chalk.red(`  ✗ Rejecting: `) + chalk.white(rejectedTitles.join(', ')));
+  }
+  console.log(chalk.green("─".repeat(60)) + "\n");
+  
+  return prefs;
+}
+
+// --- CORE ACTIONS ---
+
 async function updateAllSources(): Promise<void> {
   await initializeDataDirectory();
   
   const db = await loadJobsDatabase();
   const processedData = await loadProcessedJobs();
   
-  console.log("\n" + "=".repeat(60));
-  console.log("UPDATING JOBS FROM ALL SOURCES");
-  console.log("=".repeat(60));
+  console.log("\n" + chalk.bold.blue("╔" + "═".repeat(58) + "╗"));
+  console.log(chalk.bold.blue("║") + chalk.bold.cyan(" 🌐  FETCHING JOBS FROM SOURCES".padEnd(58)) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("╚" + "═".repeat(58) + "╝"));
+  
+  // 1. Fetch all raw jobs first
+  const allFetchedJobs: JobListing[] = [];
+  for (const source of CONFIG.GITHUB_SOURCES) {
+    const jobs = await fetchJobsFromGitHub(source.url, source.displayUrl);
+    allFetchedJobs.push(...jobs);
+  }
+  
+  // 2. Prompt for Title Preferences
+  const prefs = await promptForTitlePreferences(allFetchedJobs);
+  
+  console.log("\n" + chalk.cyan("⚙️  Applying filters and updating database..."));
   
   let totalNewJobs = 0;
   let totalAlreadyProcessed = 0;
+  let totalFilteredOut = 0;
   
-  // Track seen links across all sources for efficient duplicate detection
+  // Track seen links to prevent duplicates within the database
   const seenLinks = new Set<string>(db.unprocessed.map(j => j.applicationLink));
   
-  for (const source of CONFIG.GITHUB_SOURCES) {
-    const jobs = await fetchJobsFromGitHub(source.url, source.displayUrl);
-    
-    let sourceNewJobs = 0;
-    let sourceAlreadyProcessed = 0;
-    
-    // Filter and deduplicate in a single pass
-    for (const job of jobs) {
-      if (processedData.processedLinks.has(job.applicationLink)) {
-        sourceAlreadyProcessed++;
-      } else if (!seenLinks.has(job.applicationLink)) {
-        db.unprocessed.push(job);
-        seenLinks.add(job.applicationLink);
-        sourceNewJobs++;
-      }
+  for (const job of allFetchedJobs) {
+    // Check global processed list
+    if (processedData.processedLinks.has(job.applicationLink)) {
+      totalAlreadyProcessed++;
+      continue;
     }
     
-    console.log(`\n${source.name}:`);
-    console.log(`  New jobs found: ${jobs.length}`);
-    console.log(`  Already processed: ${sourceAlreadyProcessed}`);
-    console.log(`  To be added: ${sourceNewJobs}`);
+    // Check User Preferences
+    if (!matchesPreferences(job.role, prefs)) {
+      totalFilteredOut++;
+      continue;
+    }
     
-    totalNewJobs += sourceNewJobs;
-    totalAlreadyProcessed += sourceAlreadyProcessed;
+    // Check if already in unprocessed queue
+    if (!seenLinks.has(job.applicationLink)) {
+      db.unprocessed.push(job);
+      seenLinks.add(job.applicationLink);
+      totalNewJobs++;
+    }
   }
-  
-  // No need for separate deduplication - already done above
-  /* Removed inefficient post-processing:
-  const seen = new Set<string>();
-  db.unprocessed = db.unprocessed.filter((job) => {
-  */
   
   await saveJobsDatabase(db);
   
-  console.log("\n" + "=".repeat(60));
-  console.log("SUMMARY");
-  console.log("=".repeat(60));
-  console.log(`Total new jobs added: ${totalNewJobs}`);
-  console.log(`Already processed: ${totalAlreadyProcessed}`);
-  console.log(`Total unprocessed jobs: ${db.unprocessed.length}`);
-  console.log("\n✓ Update complete!");
+  console.log("\n" + chalk.bold.magenta("╔" + "═".repeat(58) + "╗"));
+  console.log(chalk.bold.magenta("║") + chalk.bold.white(" 📊  UPDATE SUMMARY".padEnd(58)) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("╠" + "═".repeat(58) + "╣"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Fetched Total:      ${chalk.bold.cyan(allFetchedJobs.length.toString().padStart(5))}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  New Added:          ${chalk.bold.green(totalNewJobs.toString().padStart(5))}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Filtered (Title):   ${chalk.bold.yellow(totalFilteredOut.toString().padStart(5))}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Already Processed:  ${chalk.bold.gray(totalAlreadyProcessed.toString().padStart(5))}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Total Queue Size:   ${chalk.bold.blue(db.unprocessed.length.toString().padStart(5))}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("╚" + "═".repeat(58) + "╝"));
+  console.log("\n" + chalk.bold.green("✓ Update complete!") + "\n");
+  
+  // Show analytics if we have new jobs
+  if (allFetchedJobs.length > 0) {
+    analyzeJobs(allFetchedJobs);
+  }
 }
 
-/**
- * Marks a batch of jobs as processed by moving them from unprocessed to processed lists.
- * Uses Set for O(1) lookup performance when filtering unprocessed jobs.
- * 
- * @param links - Array of application links to mark as processed
- * @returns Promise that resolves when both databases are updated
- * 
- * @remarks
- * Updates both processed.json and jobs.json atomically.
- * Uses Set-based filtering for O(n) performance instead of O(n²).
- */
 async function markJobsAsProcessed(links: string[]): Promise<void> {
   const processedData = await loadProcessedJobs();
   
   links.forEach((link) => processedData.processedLinks.add(link));
   processedData.totalProcessed = processedData.processedLinks.size;
-  
   await saveProcessedJobs(processedData);
 
-  // Update jobs database
   const db = await loadJobsDatabase();
   db.processed.push(...links);
   
-  // Remove from unprocessed - use Set for O(1) lookups instead of O(n) includes
   const linksSet = new Set(links);
   db.unprocessed = db.unprocessed.filter(
     (job) => !linksSet.has(job.applicationLink)
   );
   
+  // If we removed jobs, ensure currentIndex is still valid
+  if (db.currentIndex >= db.unprocessed.length) {
+    db.currentIndex = Math.max(0, db.unprocessed.length - 1);
+  }
+  
   await saveJobsDatabase(db);
 }
 
 /**
- * Interactive command to review and apply to jobs in batches.
- * Displays job details, opens applications in browser, and tracks which jobs are processed.
- * 
- * @returns Promise that resolves when user finishes processing or quits
- * 
- * @remarks
- * - Supports resuming from a specific index via START_INDEX env variable
- * - Allows marking jobs as processed without opening ("mark" command)
- * - Shows progress with batch numbers and job indices
+ * Main application loop with advanced features
  */
 async function openJobsInBatches(): Promise<void> {
   const rl = readline.createInterface({ input, output });
+
+  // Initialize session tracking
+  startSession();
 
   try {
     const db = await loadJobsDatabase();
 
     if (db.unprocessed.length === 0) {
-      console.log("No unprocessed jobs found. Run 'update' command first.");
+      console.log(chalk.yellow("No unprocessed jobs found. Run ") + chalk.cyan("'update'") + chalk.yellow(" command first."));
       return;
     }
 
-    const startIndexRaw = process.env.START_INDEX ?? "0";
-    let startIndex = parseInt(startIndexRaw, 10);
-    if (isNaN(startIndex) || startIndex < 0 || startIndex >= db.unprocessed.length) {
+    // Use stored index
+    let startIndex = db.currentIndex || 0;
+    if (startIndex === undefined || startIndex === null) {
       startIndex = 0;
     }
+    
+    console.log("\n" + chalk.bold.blue("╔" + "═".repeat(58) + "╗"));
+    console.log(chalk.bold.blue("║") + chalk.bold.cyan(" 💼  JOB APPLICATION QUEUE".padEnd(58)) + chalk.bold.blue("║"));
+    console.log(chalk.bold.blue("╠" + "═".repeat(58) + "╣"));
+    console.log(chalk.bold.blue("║") + chalk.white(`  Total Unprocessed:  ${chalk.bold.yellow(db.unprocessed.length)}`).padEnd(67) + chalk.bold.blue("║"));
+    console.log(chalk.bold.blue("║") + chalk.white(`  Starting from:      ${chalk.bold.green(startIndex)}`).padEnd(67) + chalk.bold.blue("║"));
+    console.log(chalk.bold.blue("╚" + "═".repeat(58) + "╝"));
+    console.log(chalk.gray("\n💡 Shortcuts: ") + chalk.white("1-5") + chalk.gray(" mark job | ") + chalk.white("s") + chalk.gray(" skip | ") + chalk.white("a") + chalk.gray(" mark all | ") + chalk.white("p#") + chalk.gray(" preview | ") + chalk.white("u") + chalk.gray(" undo | ") + chalk.white("/") + chalk.gray(" search | ") +chalk.white("q") + chalk.gray(" quit"));
+    
+    while (startIndex < db.unprocessed.length) {
+      const endIndex = Math.min(startIndex + CONFIG.BATCH_SIZE, db.unprocessed.length);
+      const batch = db.unprocessed.slice(startIndex, endIndex);
+      
+      // Update session stats
+      if (currentSession) {
+        currentSession.jobsViewed += batch.length;
+      }
+      
+      console.log("\n" + chalk.bold.cyan("┌" + "─".repeat(58) + "┐"));
+      console.log(chalk.bold.cyan("│") + chalk.bold.white(` 📦 Batch [Jobs ${startIndex+1}-${endIndex}] of ${db.unprocessed.length}`.padEnd(58)) + chalk.bold.cyan("│"));
+      console.log(chalk.bold.cyan("└" + "─".repeat(58) + "┘"));
 
-    const jobsSlice = db.unprocessed.slice(startIndex);
-    const chunks = chunk(jobsSlice, CONFIG.BATCH_SIZE);
-
-    console.log(`\nTotal unprocessed jobs: ${db.unprocessed.length}`);
-    console.log(`Starting from index: ${startIndex}`);
-    console.log(`Batches: ${chunks.length}\n`);
-
-    for (let i = 0; i < chunks.length; i++) {
-      const batch = chunks[i];
-      const globalBatchIndex = startIndex + i * CONFIG.BATCH_SIZE;
-
-      console.log(`\n${"=".repeat(60)}`);
-      console.log(`Batch ${i + 1}/${chunks.length} [Jobs ${globalBatchIndex}–${globalBatchIndex + batch.length - 1}]`);
-      console.log("=".repeat(60));
-
+      // Display jobs with smart company grouping (O(n) single pass)
+      let lastCompany = '';
       batch.forEach((job, idx) => {
-        console.log(`\n${idx + 1}. ${job.company} - ${job.role}`);
-        console.log(`   Location: ${job.location}`);
-        console.log(`   Terms: ${job.terms}`);
-        console.log(`   Age: ${job.age}`);
-        console.log(`   Link: ${job.applicationLink}`);
+        const jobNum = chalk.bold.cyan(`${startIndex + idx + 1}.`);
+        const isSameCompany = job.company === lastCompany;
+        const relTime = chalk.green(getRelativeTime(job.age));
+        
+        if (isSameCompany) {
+          // Grouped job under same company - show with continuation arrow
+          const role = chalk.yellow(job.role);
+          console.log(`\n${jobNum} ${chalk.gray('└─')} ${role}`);
+          console.log(chalk.gray(`      📍 ${job.location} ${chalk.dim('|')} 📅 ${job.terms} ${chalk.dim('|')} ⏰ ${relTime}`));
+        } else {
+          // New company - show full header
+          const company = chalk.bold.white(job.company);
+          const role = chalk.yellow(job.role);
+          console.log(`\n${jobNum} ${company} ${chalk.gray('·')} ${role}`);
+          console.log(chalk.gray(`   📍 ${job.location} ${chalk.dim('|')} 📅 ${job.terms} ${chalk.dim('|')} ⏰ ${relTime}`));
+          lastCompany = job.company;
+        }
       });
 
-      const answer = (await rl.question("\nOpen this batch? (y/n/mark) "))
+      console.log("\n" + chalk.gray("─".repeat(60)));
+      const answer = (await rl.question(chalk.bold.white("\n❯ ") + "Your action: "))
         .trim()
         .toLowerCase();
 
-      if (answer === "mark") {
-        // Mark as processed without opening
-        const links = batch.map((job) => job.applicationLink);
+      // QUICK ACTIONS
+      
+      // 1-5: Mark specific job
+      if (answer >= '1' && answer <= '5') {
+        const jobIndex = parseInt(answer) - 1;
+        if (jobIndex < batch.length) {
+          const job = batch[jobIndex];
+          const links = [job.applicationLink];
+          saveUndoOperation('mark_single', links);
+          await markJobsAsProcessed(links);
+          console.log(chalk.green(`\n✓ Marked job #${startIndex + jobIndex + 1}: ${job.company} - ${job.role}`));
+          if (currentSession) currentSession.jobsMarked++;
+          const freshDb = await loadJobsDatabase();
+          db.unprocessed = freshDb.unprocessed;
+          continue;
+        } else {
+          console.log(chalk.yellow(`\n⚠ Invalid job number. This batch has ${batch.length} jobs.`));
+          continue;
+        }
+      }
+      
+      // s: Skip
+      if (answer === 's' || answer === 'skip') {
+        startIndex += CONFIG.BATCH_SIZE;
+        db.currentIndex = startIndex;
+        await saveJobsDatabase(db);
+        console.log(chalk.cyan("\n→ Skipped batch"));
+        if (currentSession) currentSession.batchesProcessed++;
+        continue;
+      }
+      
+      // a: Mark all
+      if (answer === 'a' || answer === 'all') {
+        const links = batch.map(j => j.applicationLink);
+        saveUndoOperation('mark_batch', links);
         await markJobsAsProcessed(links);
-        console.log("✓ Marked batch as processed");
+        console.log(chalk.bold.green(`\n✓ Marked all ${batch.length} jobs as processed!`));
+        if (currentSession) {
+          currentSession.jobsMarked += batch.length;
+          currentSession.batchesProcessed++;
+        }
+        const freshDb = await loadJobsDatabase();
+        db.unprocessed = freshDb.unprocessed;
+        continue;
+      }
+      
+      // p#: Preview
+      if (answer.startsWith('p')) {
+        const numStr = answer.substring(1).trim();
+        const jobIndex = parseInt(numStr) - 1;
+        if (!isNaN(jobIndex) && jobIndex >= 0 && jobIndex < batch.length) {
+          const job = batch[jobIndex];
+          console.log("\n" + chalk.bold.blue("═".repeat(60)));
+          console.log(chalk.bold.cyan("📋 JOB PREVIEW"));
+          console.log(chalk.bold.blue("═".repeat(60)));
+          console.log(chalk.white(`Company:  ${chalk.bold(job.company)}`));
+          console.log(chalk.white(`Role:     ${chalk.yellow(job.role)}`));
+          console.log(chalk.white(`Location: ${chalk.gray(job.location)}`));
+          console.log(chalk.white(`Terms:    ${chalk.gray(job.terms)}`));
+          console.log(chalk.white(`Age:      ${chalk.green(getRelativeTime(job.age))}`));
+          console.log(chalk.white(`Link:     ${chalk.cyan(job.applicationLink)}`));
+          console.log(chalk.white(`Source:   ${chalk.dim(job.source)}`));
+          console.log(chalk.bold.blue("═".repeat(60)));
+          continue;
+        } else {
+          console.log(chalk.yellow("\n⚠ Invalid job number for preview"));
+          continue;
+        }
+      }
+      
+      // u: Undo
+      if (answer === 'u' || answer === 'undo') {
+        await performUndo();
+        const freshDb = await loadJobsDatabase();
+        db.unprocessed = freshDb.unprocessed;
+        continue;
+      }
+      
+      // /: Search (basic implementation)
+      if (answer === '/' || answer === 'search') {
+        const query = await rl.question(chalk.cyan("\nSearch (company or role): "));
+        const searchTerm = query.toLowerCase();
+        const filteredJobs = db.unprocessed.filter(job => 
+          job.company.toLowerCase().includes(searchTerm) || 
+          job.role.toLowerCase().includes(searchTerm)
+        );
+        
+        if (filteredJobs.length === 0) {
+          console.log(chalk.yellow(`\n⚠ No jobs found matching "${query}"`));
+        } else {
+          console.log(chalk.green(`\n✓ Found ${filteredJobs.length} jobs matching "${query}":`));
+          filteredJobs.slice(0, 10).forEach((job, idx) => {
+            console.log(chalk.white(`  ${idx + 1}. ${chalk.bold(job.company)} - ${chalk.yellow(job.role)}`));
+          });
+          if (filteredJobs.length > 10) {
+            console.log(chalk.gray(`  ... and ${filteredJobs.length - 10} more`));
+          }
+        }
         continue;
       }
 
-      if (!answer.startsWith("y")) {
-        const nextStartIndex = startIndex + (i + 1) * CONFIG.BATCH_SIZE;
-        console.log("\nStopping as requested.");
-        console.log(`To resume: START_INDEX=${nextStartIndex} bun run apply`);
-        return;
+      // q: Quit
+      if (answer === 'q' || answer === 'quit') {
+        db.currentIndex = startIndex;
+        await saveJobsDatabase(db);
+        showSessionSummary();
+        console.log(chalk.green("\n👋 Goodbye!\n"));
+        break;
       }
 
-      // Open jobs
-      await Promise.all(
-        batch.map((job) => Bun.$`xdg-open ${job.applicationLink}`.nothrow())
-      );
-
-      const markAnswer = (
-        await rl.question("Mark this batch as processed? (y/n) ")
-      )
-        .trim()
-        .toLowerCase();
-
-      if (markAnswer.startsWith("y")) {
+      // m: Mark batch
+      if (answer === 'm' || answer === 'mark') {
         const links = batch.map((job) => job.applicationLink);
+        saveUndoOperation('mark_batch', links);
         await markJobsAsProcessed(links);
-        console.log("✓ Batch marked as processed");
+        console.log(chalk.bold.green("\n✓ Batch marked as processed!"));
+        if (currentSession) {
+          currentSession.jobsMarked += batch.length;
+          currentSession.batchesProcessed++;
+        }
+        const freshDb = await loadJobsDatabase();
+        db.unprocessed = freshDb.unprocessed;
+        continue; 
+      }
+
+      // n: Next
+      if (answer === 'n' || answer === 'next' || answer === 'no') {
+        startIndex += CONFIG.BATCH_SIZE;
+        db.currentIndex = startIndex;
+        await saveJobsDatabase(db);
+        if (currentSession) currentSession.batchesProcessed++;
+        continue;
+      }
+
+      // y: Yes, open
+      if (answer.startsWith('y') || answer === 'yes') {
+        await Promise.all(
+          batch.map((job) => Bun.$`xdg-open ${job.applicationLink}`.nothrow())
+        );
+
+        const markAnswer = (
+          await rl.question(chalk.white("\nMark as processed? (y/n) "))
+        ).trim().toLowerCase();
+
+        if (markAnswer.startsWith('y')) {
+          const links = batch.map((job) => job.applicationLink);
+          saveUndoOperation('mark_batch', links);
+          await markJobsAsProcessed(links);
+          console.log(chalk.bold.green("\n✓ Batch processed!"));
+          if (currentSession) {
+            currentSession.jobsMarked += batch.length;
+            currentSession.batchesProcessed++;
+          }
+          const freshDb = await loadJobsDatabase();
+          db.unprocessed = freshDb.unprocessed;
+        } else {
+          startIndex += CONFIG.BATCH_SIZE;
+          db.currentIndex = startIndex;
+          await saveJobsDatabase(db);
+        }
+        continue;
+      }
+      
+      // Invalid command
+      console.log(chalk.yellow("\n⚠ Invalid command. Try: y/n/m/q or 1-5/s/a/p#/u/"));
+    }
+    
+    if (startIndex >= db.unprocessed.length && db.unprocessed.length > 0) {
+      console.log("\n" + chalk.bold.green("🎉 Reached end of job list!"));
+      const reset = await rl.question(chalk.bold.white("\n❯ ") + "Start over from beginning? (y/n) ");
+      if (reset.toLowerCase().startsWith('y')) {
+        db.currentIndex = 0;
+        await saveJobsDatabase(db);
+        console.log(chalk.green("\n✓ Reset to beginning.\n"));
       }
     }
 
-    console.log("\n✓ All jobs processed!");
   } finally {
     rl.close();
   }
 }
 
-/**
- * Splits an array into chunks of specified size.
- * 
- * @param arr - Array to split into chunks
- * @param size - Size of each chunk
- * @returns Array of arrays, each containing up to 'size' elements
- * 
- * @example
- * chunk([1, 2, 3, 4, 5], 2) // [[1, 2], [3, 4], [5]]
- */
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    out.push(arr.slice(i, i + size));
-  }
-  return out;
-}
+// --- BOILERPLATE HELPERS ---
 
-/**
- * Displays help information about available commands and usage.
- * 
- * @returns Promise that resolves after help text is printed
- */
 async function showHelp(): Promise<void> {
-  console.log(`
-Job Application Manager (Automated)
-====================================
-
-Commands:
-  help              Show this help message
-  update            Automatically fetch and update jobs from all sources
-  apply             Open and process jobs in batches
-  stats             Show statistics
-  reset             Reset all data (careful!)
-
-Environment Variables:
-  START_INDEX       Resume from specific job index (for 'apply' command)
-
-Examples:
-  bun run job-manager.ts update
-  bun run job-manager.ts apply
-  START_INDEX=10 bun run job-manager.ts apply
-
-Sources (automatically fetched):
-  - Summer 2026 Internships
-  - New Grad Positions
-  - Off-Season Internships
-`);
+  console.log("\n" + chalk.bold.blue("╔" + "═".repeat(58) + "╗"));
+  console.log(chalk.bold.blue("║") + chalk.bold.cyan(" 💼  JOB APPLICATION MANAGER".padEnd(58)) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("╠" + "═".repeat(58) + "╣"));
+  console.log(chalk.bold.blue("║") + chalk.bold.white(" Commands:" .padEnd(58)) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.cyan('update')}       Fetch, filter, and save jobs`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.cyan('apply')}        Process jobs (smart shortcuts)`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.cyan('stats')}        Show database statistics`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.cyan('insights')}     Analytics & job insights`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.cyan('export')}       Export jobs (csv/json)`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.cyan('preset')}       Manage filter presets`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.cyan('reset')}        Wipe all data`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("╠" + "═".repeat(58) + "╣"));
+  console.log(chalk.bold.blue("║") + chalk.bold.yellow(" Apply Mode Shortcuts:".padEnd(58)) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.green('1-5')}         Mark specific job`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.green('s')}           Skip batch`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.green('a')}           Mark all in batch`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.green('p#')}          Preview job details (e.g., p1)`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.green('u')}           Undo last mark (<1min)`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.green('/')}           Search jobs`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.green('y')}           Open jobs in browser`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.green('m')}           Mark batch processed`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.green('n')}           Next batch`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("║") + chalk.white(`   ${chalk.green('q')}           Quit (saves session stats)`).padEnd(67) + chalk.bold.blue("║"));
+  console.log(chalk.bold.blue("╚" + "═".repeat(58) + "╝"));
+  console.log("");
 }
 
-/**
- * Displays statistics about processed and unprocessed jobs.
- * Shows job counts and source URLs.
- * 
- * @returns Promise that resolves after stats are printed
- */
 async function showStats(): Promise<void> {
   const db = await loadJobsDatabase();
-  const processedData = await loadProcessedJobs();
-
-  console.log(`
-Job Application Statistics
-===========================
-
-Unprocessed Jobs:    ${db.unprocessed.length}
-Processed Jobs:      ${processedData.totalProcessed}
-Total Jobs Tracked:  ${db.unprocessed.length + processedData.totalProcessed}
-
-Last Updated:        ${processedData.lastUpdated}
-
-Sources:
-  - Summer 2026 Internships: ${CONFIG.GITHUB_SOURCES[0].displayUrl}
-  - New Grad Positions:      ${CONFIG.GITHUB_SOURCES[1].displayUrl}
-  - Off-Season Internships:  ${CONFIG.GITHUB_SOURCES[2].displayUrl}
-`);
+  const processed = await loadProcessedJobs();
+  const prefs = await loadUserPreferences();
+  
+  console.log("\n" + chalk.bold.magenta("╔" + "═".repeat(58) + "╗"));
+  console.log(chalk.bold.magenta("║") + chalk.bold.white(" 📊  DATABASE STATISTICS".padEnd(58)) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("╠" + "═".repeat(58) + "╣"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Unprocessed Jobs:    ${chalk.bold.yellow(db.unprocessed.length)}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Processed Jobs:      ${chalk.bold.green(processed.totalProcessed)}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Current Index:       ${chalk.bold.cyan(db.currentIndex || 0)}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("╠" + "═".repeat(58) + "╣"));
+  console.log(chalk.bold.magenta("║") + chalk.bold.white(" 🎯  FILTER PREFERENCES".padEnd(58)) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Accepted Keywords:   ${chalk.bold.green(prefs.acceptedTitles.size || 'All')}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Rejected Keywords:   ${chalk.bold.red(prefs.rejectedTitles.size || 'None')}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("╚" + "═".repeat(58) + "╝"));
+  console.log("");
 }
 
-/**
- * Resets all job data after user confirmation.
- * Clears both the jobs database and processed jobs tracking.
- * 
- * @returns Promise that resolves after data is reset or user cancels
- * 
- * @remarks
- * Requires explicit "yes" confirmation to prevent accidental data loss.
- */
 async function resetData(): Promise<void> {
   const rl = readline.createInterface({ input, output });
-  
-  try {
-    const answer = (
-      await rl.question("Are you sure you want to reset all data? (yes/no) ")
-    ).trim().toLowerCase();
-
-    if (answer === "yes") {
-      await writeFile(CONFIG.JOBS_FILE, JSON.stringify({
-        unprocessed: [],
-        processed: [],
-        sources: {
-          summer2026Internships: "",
-          newGrad: "",
-          offSeason: "",
-        },
-      }, null, 2));
-      
-      await writeFile(CONFIG.PROCESSED_FILE, JSON.stringify({
-        processedLinks: [],
-        lastUpdated: new Date().toISOString(),
-        totalProcessed: 0,
-      }, null, 2));
-      
-      console.log("✓ All data reset!");
-    } else {
-      console.log("Reset cancelled.");
-    }
-  } finally {
-    rl.close();
+  const ans = await rl.question("Reset ALL data? (y/n) ");
+  if (ans.toLowerCase() === 'y') {
+    await writeFile(CONFIG.JOBS_FILE, JSON.stringify({ unprocessed: [], processed: [], currentIndex: 0, sources: {} }));
+    await writeFile(CONFIG.PROCESSED_FILE, JSON.stringify({ processedLinks: [], totalProcessed: 0 }));
+    console.log("Data reset.");
   }
+  rl.close();
 }
 
-/**
- * Main entry point for the application.
- * Routes to appropriate command handler based on argv.
- * 
- * @remarks
- * Available commands: help, update, apply, stats, reset
- * Exits with code 1 on unknown command.
- */
 async function main() {
   await initializeDataDirectory();
-
   const command = process.argv[2] || "help";
-
+  const arg = process.argv[3];
+  
   switch (command) {
-    case "help":
+    case "update": 
+      await updateAllSources(); 
+      break;
+      
+    case "apply": 
+      await openJobsInBatches(); 
+      break;
+      
+    case "stats": 
+      await showStats(); 
+      break;
+      
+    case "insights":
+    case "analytics":
+      const db = await loadJobsDatabase();
+      if (db.unprocessed.length > 0) {
+        analyzeJobs(db.unprocessed);
+      } else {
+        console.log(chalk.yellow("No jobs to analyze. Run 'update' first."));
+      }
+      break;
+      
+    case "export":
+      if (!arg || !['csv', 'json'].includes(arg)) {
+        console.log(chalk.yellow("\nUsage: bun run job-manager.ts export <csv|json>"));
+        break;
+      }
+      const exportDb = await loadJobsDatabase();
+      if (exportDb.unprocessed.length === 0) {
+        console.log(chalk.yellow("No jobs to export. Run 'update' first."));
+        break;
+      }
+      const timestamp = new Date().toISOString().split('T')[0];
+      if (arg === 'csv') {
+        await exportToCSV(exportDb.unprocessed, `jobs_${timestamp}.csv`);
+      } else {
+        await exportToJSON(exportDb.unprocessed, `jobs_${timestamp}.json`);
+      }
+      break;
+      
+    case "preset":
+      if (!arg) {
+        await listFilterPresets();
+        break;
+      }
+      if (arg === 'list') {
+        await listFilterPresets();
+      } else if (arg === 'save') {
+        const name = process.argv[4];
+        if (!name) {
+          console.log(chalk.yellow("\nUsage: bun run job-manager.ts preset save <name>"));
+          break;
+        }
+        const prefs = await loadUserPreferences();
+        await saveFilterPreset(name, prefs);
+      } else if (arg === 'load') {
+        const name = process.argv[4];
+        if (!name) {
+          console.log(chalk.yellow("\nUsage: bun run job-manager.ts preset load <name>"));
+          break;
+        }
+        await loadFilterPreset(name);
+      } else {
+        console.log(chalk.yellow("\nUsage: bun run job-manager.ts preset <list|save|load> [name]"));
+      }
+      break;
+      
+    case "reset": 
+      await resetData(); 
+      break;
+      
+    default: 
       await showHelp();
-      break;
-    case "update":
-      await updateAllSources();
-      break;
-    case "apply":
-      await openJobsInBatches();
-      break;
-    case "stats":
-      await showStats();
-      break;
-    case "reset":
-      await resetData();
-      break;
-    default:
-      console.error(`Unknown command: ${command}`);
-      await showHelp();
-      process.exit(1);
   }
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
-});
+main().catch(console.error);
