@@ -19,6 +19,7 @@ interface JobListing {
   age: string;
   dateAdded: string;
   source: string;
+  parsedDate?: Date; // For datetime ordering
 }
 
 /**
@@ -91,27 +92,106 @@ const CONFIG = {
   PROCESSED_FILE: "./job-data/processed.json",
   PREFERENCES_FILE: "./job-data/preferences.json",
   EXPORTS_DIR: "./job-data/exports",
+  // SimplifyJobs sources with year templates
   GITHUB_SOURCES: [
     {
-      name: "summer2026Internships",
-      url: "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md",
-      displayUrl: "https://github.com/SimplifyJobs/Summer2026-Internships/blob/dev/README.md",
+      name: "summerInternships",
+      urlTemplate: "https://raw.githubusercontent.com/SimplifyJobs/Summer{YEAR}-Internships/dev/README.md",
+      displayUrlTemplate: "https://github.com/SimplifyJobs/Summer{YEAR}-Internships/blob/dev/README.md",
       type: "internship" as const,
     },
     {
       name: "newGrad",
-      url: "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md",
-      displayUrl: "https://github.com/SimplifyJobs/New-Grad-Positions",
+      urlTemplate: "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md",
+      displayUrlTemplate: "https://github.com/SimplifyJobs/New-Grad-Positions",
       type: "newgrad" as const,
     },
     {
       name: "offSeason",
-      url: "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README-Off-Season.md",
-      displayUrl: "https://github.com/SimplifyJobs/Summer2026-Internships/blob/dev/README-Off-Season.md",
+      urlTemplate: "https://raw.githubusercontent.com/SimplifyJobs/Summer{YEAR}-Internships/dev/README-Off-Season.md",
+      displayUrlTemplate: "https://github.com/SimplifyJobs/Summer{YEAR}-Internships/blob/dev/README-Off-Season.md",
       type: "internship" as const,
     },
   ],
   MAX_AGE_DAYS: 30,
+  // DateTime ordering configuration
+  JOB_ORDERING: "newest" as "newest" | "oldest",
+  BASE_YEAR: new Date().getFullYear(),
+  // Jobright-AI sources - Design, Engineering, Data, Product (New Grad + Internship)
+  JOBRIGHT_AI_SOURCES: [
+    // === NEW GRAD ===
+    {
+      name: "softwareEngineerNewGrad",
+      urlTemplate: "https://raw.githubusercontent.com/jobright-ai/{YEAR}-Software-Engineer-New-Grad/master/README.md",
+      displayUrlTemplate: "https://github.com/jobright-ai/{YEAR}-Software-Engineer-New-Grad",
+      type: "newgrad" as const,
+      category: "Software-Engineer",
+    },
+    {
+      name: "engineeringNewGrad",
+      urlTemplate: "https://raw.githubusercontent.com/jobright-ai/{YEAR}-Engineering-New-Grad/master/README.md",
+      displayUrlTemplate: "https://github.com/jobright-ai/{YEAR}-Engineering-New-Grad",
+      type: "newgrad" as const,
+      category: "Engineering",
+    },
+    {
+      name: "dataAnalysisNewGrad",
+      urlTemplate: "https://raw.githubusercontent.com/jobright-ai/{YEAR}-Data-Analysis-New-Grad/master/README.md",
+      displayUrlTemplate: "https://github.com/jobright-ai/{YEAR}-Data-Analysis-New-Grad",
+      type: "newgrad" as const,
+      category: "Data-Analysis",
+    },
+    {
+      name: "designNewGrad",
+      urlTemplate: "https://raw.githubusercontent.com/jobright-ai/{YEAR}-Design-New-Grad/master/README.md",
+      displayUrlTemplate: "https://github.com/jobright-ai/{YEAR}-Design-New-Grad",
+      type: "newgrad" as const,
+      category: "Design",
+    },
+    {
+      name: "productManagementNewGrad",
+      urlTemplate: "https://raw.githubusercontent.com/jobright-ai/{YEAR}-Product-Management-New-Grad/master/README.md",
+      displayUrlTemplate: "https://github.com/jobright-ai/{YEAR}-Product-Management-New-Grad",
+      type: "newgrad" as const,
+      category: "Product-Management",
+    },
+    // === INTERNSHIPS ===
+    {
+      name: "softwareEngineerInternship",
+      urlTemplate: "https://raw.githubusercontent.com/jobright-ai/{YEAR}-Software-Engineer-Internship/master/README.md",
+      displayUrlTemplate: "https://github.com/jobright-ai/{YEAR}-Software-Engineer-Internship",
+      type: "internship" as const,
+      category: "Software-Engineer",
+    },
+    {
+      name: "engineerInternship",
+      urlTemplate: "https://raw.githubusercontent.com/jobright-ai/{YEAR}-Engineer-Internship/master/README.md",
+      displayUrlTemplate: "https://github.com/jobright-ai/{YEAR}-Engineer-Internship",
+      type: "internship" as const,
+      category: "Engineering",
+    },
+    {
+      name: "dataAnalysisInternship",
+      urlTemplate: "https://raw.githubusercontent.com/jobright-ai/{YEAR}-Data-Analysis-Internship/master/README.md",
+      displayUrlTemplate: "https://github.com/jobright-ai/{YEAR}-Data-Analysis-Internship",
+      type: "internship" as const,
+      category: "Data-Analysis",
+    },
+    {
+      name: "designInternship",
+      urlTemplate: "https://raw.githubusercontent.com/jobright-ai/{YEAR}-Design-Internship/master/README.md",
+      displayUrlTemplate: "https://github.com/jobright-ai/{YEAR}-Design-Internship",
+      type: "internship" as const,
+      category: "Design",
+    },
+    {
+      name: "productManagementInternship",
+      urlTemplate: "https://raw.githubusercontent.com/jobright-ai/{YEAR}-Product-Management-Internship/master/README.md",
+      displayUrlTemplate: "https://github.com/jobright-ai/{YEAR}-Product-Management-Internship",
+      type: "internship" as const,
+      category: "Product-Management",
+    },
+  ],
 } as const;
 
 // Session state (not persisted)
@@ -347,6 +427,175 @@ async function fetchJobsFromGitHub(sourceUrl: string, displayUrl: string): Promi
   console.error(chalk.red(`Error: ${error}`));
     return [];
   }
+}
+
+// --- JOBRIGHT-AI FETCH & PARSE FUNCTIONS ---
+
+/**
+ * Result of a fetch attempt with year detection
+ */
+interface FetchResult {
+  success: boolean;
+  year: number;
+  content?: string;
+  error?: string;
+}
+
+/**
+ * Fetch with year fallback - detects 404 and increments year until valid
+ */
+async function fetchWithYearFallback(
+  urlTemplate: string,
+  startYear: number,
+  maxRetries: number = 3
+): Promise<FetchResult> {
+  let currentYear = startYear;
+  
+  for (let attempts = 0; attempts < maxRetries; attempts++) {
+    const url = urlTemplate.replace("{YEAR}", String(currentYear));
+    
+    try {
+      const response = await fetch(url);
+      
+      if (response.status === 404) {
+        // Year likely not yet created - try next year
+        currentYear++;
+        continue;
+      }
+      
+      if (!response.ok) {
+        return { success: false, year: currentYear, error: `HTTP ${response.status}` };
+      }
+      
+      const content = await response.text();
+      return { success: true, year: currentYear, content };
+      
+    } catch (error) {
+      return { success: false, year: currentYear, error: String(error) };
+    }
+  }
+  
+  return { success: false, year: currentYear, error: "Max retries exceeded" };
+}
+
+/**
+ * Parse date from jobright-ai format "Mon Day" (e.g., "Dec 23")
+ */
+function parseJobrightDate(dateStr: string, year: number): Date | null {
+  const months: Record<string, number> = {
+    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+    jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
+  };
+  
+  const match = dateStr.trim().match(/^(\w{3})\s+(\d{1,2})$/i);
+  if (!match) return null;
+  
+  const month = months[match[1].toLowerCase()];
+  const day = parseInt(match[2]);
+  
+  if (month === undefined || isNaN(day)) return null;
+  
+  return new Date(year, month, day);
+}
+
+/**
+ * Sort jobs by parsed date according to ordering config
+ */
+function sortJobsByDate(jobs: JobListing[], order: "newest" | "oldest"): JobListing[] {
+  return [...jobs].sort((a, b) => {
+    const dateA = a.parsedDate?.getTime() ?? 0;
+    const dateB = b.parsedDate?.getTime() ?? 0;
+    return order === "newest" ? dateB - dateA : dateA - dateB;
+  });
+}
+
+/**
+ * Parse jobright-ai table format
+ * Columns: Company, Job Title, Location, Work Model, Date Posted
+ */
+function parseJobrightAITable(markdown: string, sourceUrl: string, year: number): JobListing[] {
+  const jobs: JobListing[] = [];
+  
+  // Split into lines and find markdown table rows (start with |)
+  const lines = markdown.split('\n');
+  
+  for (const line of lines) {
+    // Skip non-table lines, header row, and separator row
+    if (!line.startsWith('|')) continue;
+    if (line.includes('Company') && line.includes('Job Title')) continue; // Header
+    if (line.includes('-----')) continue; // Separator
+    
+    // Parse markdown table row: | Company | Job Title | Location | Work Model | Date |
+    const cells = line.split('|').map(c => c.trim()).filter(c => c.length > 0);
+    if (cells.length < 5) continue;
+    
+    const [companyCell, roleCell, locationCell, workModelCell, dateCell] = cells;
+    
+    // Handle continuation rows (↳ means same company as previous)
+    if (companyCell === '↳') continue; // Skip for now, or handle differently
+    
+    // Extract company name from **[Company](url)** or **[Company](url)**
+    const companyMatch = companyCell.match(/\*\*\[([^\]]+)\]/);
+    const company = companyMatch ? companyMatch[1] : companyCell.replace(/\*\*/g, '').trim();
+    
+    // Extract role and application link from **[Job Title](url)**
+    const roleMatch = roleCell.match(/\*\*\[([^\]]+)\]\(([^)]+)\)/);
+    const role = roleMatch ? roleMatch[1] : roleCell.replace(/\*\*/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim();
+    const applicationLink = roleMatch ? roleMatch[2] : '';
+    
+    // Location and work model
+    const location = locationCell;
+    const terms = workModelCell; // On Site, Remote, Hybrid
+    
+    // Parse date (e.g., "Dec 23")
+    const dateText = dateCell;
+    const parsedDate = parseJobrightDate(dateText, year);
+    
+    if (!applicationLink) continue;
+    if (!isUSLocation(location)) continue;
+
+    jobs.push({
+      company: company || 'Unknown',
+      role: role || 'Unknown Role',
+      location,
+      terms,
+      applicationLink,
+      age: dateText,
+      dateAdded: new Date().toISOString(),
+      source: sourceUrl,
+      parsedDate: parsedDate ?? undefined,
+    });
+  }
+  
+  return jobs;
+}
+
+/**
+ * Fetch all jobright-ai sources with dynamic year detection
+ */
+async function fetchJobrightAISources(): Promise<JobListing[]> {
+  const allJobs: JobListing[] = [];
+  const currentYear = CONFIG.BASE_YEAR;
+  
+  console.log(chalk.bold.cyan("\n🔍 Fetching jobright-ai sources..."));
+  
+  for (const source of CONFIG.JOBRIGHT_AI_SOURCES) {
+    const spinner = ora(`Fetching ${source.name}...`).start();
+    const result = await fetchWithYearFallback(source.urlTemplate, currentYear);
+    
+    if (!result.success || !result.content) {
+      spinner.fail(`Failed to fetch ${source.name}: ${result.error}`);
+      continue;
+    }
+    
+    const displayUrl = source.displayUrlTemplate.replace("{YEAR}", String(result.year));
+    const jobs = parseJobrightAITable(result.content, displayUrl, result.year);
+    allJobs.push(...jobs);
+    
+    spinner.succeed(`Found ${chalk.bold.green(jobs.length)} jobs from ${source.name} (${result.year})`);
+  }
+  
+  return sortJobsByDate(allJobs, CONFIG.JOB_ORDERING);
 }
 
 // --- UTILITY FUNCTIONS ---
@@ -752,15 +1001,34 @@ async function updateAllSources(): Promise<void> {
   console.log(chalk.bold.blue("║") + chalk.bold.cyan(" 🌐  FETCHING JOBS FROM SOURCES".padEnd(58)) + chalk.bold.blue("║"));
   console.log(chalk.bold.blue("╚" + "═".repeat(58) + "╝"));
   
-  // 1. Fetch all raw jobs first
+  // 1. Fetch all raw jobs first (SimplifyJobs sources with year templates)
   const allFetchedJobs: JobListing[] = [];
+  const currentYear = CONFIG.BASE_YEAR;
+  
   for (const source of CONFIG.GITHUB_SOURCES) {
-    const jobs = await fetchJobsFromGitHub(source.url, source.displayUrl);
+    const result = await fetchWithYearFallback(source.urlTemplate, currentYear);
+    
+    if (!result.success || !result.content) {
+      console.log(chalk.yellow(`⚠ Failed to fetch ${source.name}: ${result.error}`));
+      continue;
+    }
+    
+    const displayUrl = source.displayUrlTemplate.replace("{YEAR}", String(result.year));
+    const jobs = parseHTMLTable(result.content, displayUrl);
     allFetchedJobs.push(...jobs);
+    console.log(chalk.green(`✓ Found ${jobs.length} jobs from ${source.name} (${result.year})`));
   }
   
-  // 2. Prompt for Title Preferences
-  const prefs = await promptForTitlePreferences(allFetchedJobs);
+  // 2. Fetch jobright-ai sources with dynamic year detection
+  const jobrightJobs = await fetchJobrightAISources();
+  allFetchedJobs.push(...jobrightJobs);
+  
+  // 3. Sort all jobs by date according to ordering config
+  const sortedJobs = sortJobsByDate(allFetchedJobs, CONFIG.JOB_ORDERING);
+  console.log(chalk.gray(`\n📅 Jobs sorted by: ${CONFIG.JOB_ORDERING === "newest" ? "newest first" : "oldest first"}`));
+  
+  // 4. Prompt for Title Preferences
+  const prefs = await promptForTitlePreferences(sortedJobs);
   
   console.log("\n" + chalk.cyan("⚙️  Applying filters and updating database..."));
   
@@ -771,7 +1039,7 @@ async function updateAllSources(): Promise<void> {
   // Track seen links to prevent duplicates within the database
   const seenLinks = new Set<string>(db.unprocessed.map(j => j.applicationLink));
   
-  for (const job of allFetchedJobs) {
+  for (const job of sortedJobs) {
     // Check global processed list
     if (processedData.processedLinks.has(job.applicationLink)) {
       totalAlreadyProcessed++;
@@ -792,12 +1060,15 @@ async function updateAllSources(): Promise<void> {
     }
   }
   
+  // 5. Sort the unprocessed queue by date as well
+  db.unprocessed = sortJobsByDate(db.unprocessed, CONFIG.JOB_ORDERING);
+  
   await saveJobsDatabase(db);
   
   console.log("\n" + chalk.bold.magenta("╔" + "═".repeat(58) + "╗"));
   console.log(chalk.bold.magenta("║") + chalk.bold.white(" 📊  UPDATE SUMMARY".padEnd(58)) + chalk.bold.magenta("║"));
   console.log(chalk.bold.magenta("╠" + "═".repeat(58) + "╣"));
-  console.log(chalk.bold.magenta("║") + chalk.white(`  Fetched Total:      ${chalk.bold.cyan(allFetchedJobs.length.toString().padStart(5))}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(`  Fetched Total:      ${chalk.bold.cyan(sortedJobs.length.toString().padStart(5))}`).padEnd(67) + chalk.bold.magenta("║"));
   console.log(chalk.bold.magenta("║") + chalk.white(`  New Added:          ${chalk.bold.green(totalNewJobs.toString().padStart(5))}`).padEnd(67) + chalk.bold.magenta("║"));
   console.log(chalk.bold.magenta("║") + chalk.white(`  Filtered (Title):   ${chalk.bold.yellow(totalFilteredOut.toString().padStart(5))}`).padEnd(67) + chalk.bold.magenta("║"));
   console.log(chalk.bold.magenta("║") + chalk.white(`  Already Processed:  ${chalk.bold.gray(totalAlreadyProcessed.toString().padStart(5))}`).padEnd(67) + chalk.bold.magenta("║"));
@@ -806,8 +1077,8 @@ async function updateAllSources(): Promise<void> {
   console.log("\n" + chalk.bold.green("✓ Update complete!") + "\n");
   
   // Show analytics if we have new jobs
-  if (allFetchedJobs.length > 0) {
-    analyzeJobs(allFetchedJobs);
+  if (sortedJobs.length > 0) {
+    analyzeJobs(sortedJobs);
   }
 }
 
