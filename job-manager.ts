@@ -503,8 +503,9 @@ function parseJobrightDate(dateStr: string, year: number): Date | null {
  */
 function sortJobsByDate(jobs: JobListing[], order: "newest" | "oldest"): JobListing[] {
   return [...jobs].sort((a, b) => {
-    const dateA = a.parsedDate?.getTime() ?? 0;
-    const dateB = b.parsedDate?.getTime() ?? 0;
+    // Handle parsedDate being a string (from JSON) or Date object
+    const dateA = a.parsedDate ? new Date(a.parsedDate).getTime() : 0;
+    const dateB = b.parsedDate ? new Date(b.parsedDate).getTime() : 0;
     return order === "newest" ? dateB - dateA : dateA - dateB;
   });
 }
