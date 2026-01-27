@@ -294,13 +294,14 @@ function parseAgeInDays(ageText: string): number | null {
 
 function isUSLocation(location: string): boolean {
   const usStates1 = /\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO)\b/i;
-  const usStates2 = /\b(MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC|PR|VI|GU|AS|MP)\b/i;
+  const usStates2 = /\b(MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\b/i;
+  const usStates3 = /\b(DC|PR|VI|GU|AS|MP)\b/i;
   const usPatterns = /\b(USA|United States|U\.S\.|Remote.*USA?|Nationwide)\b/i;
   const nonUSPatterns1 = /\b(UK|United Kingdom|Canada|Germany|France|India|China|Japan|Australia|Europe|Asia|EMEA)\b/i;
   const nonUSPatterns2 = /\b(London|Toronto|Vancouver|Berlin|Paris|Munich|Bangalore|Beijing|Shanghai|Tokyo|Sydney|Melbourne|Edinburgh|Banbury)\b/i;
   
   if (nonUSPatterns1.test(location) || nonUSPatterns2.test(location)) return false;
-  return usStates1.test(location) || usStates2.test(location) || usPatterns.test(location);
+  return usStates1.test(location) || usStates2.test(location) || usStates3.test(location) || usPatterns.test(location);
 }
 
 /**
@@ -321,7 +322,7 @@ function extractRoleKeywords(role: string): string[] {
   for (const pattern of rolePatterns) {
     if (pattern.test(normalized)) {
       // Clean up the regex source to look nice
-      const cleanName = pattern.source.replaceAll('\\b', '').replaceAll('\\', '').replaceAll(/\[.*?\]/g, '');
+      const cleanName = pattern.source.replace(/\\b/g, '').replace(/\\/g, '').replace(/\[.*?\]/g, '');
       keywords.push(cleanName);
     }
   }
@@ -350,6 +351,57 @@ function matchesPreferences(role: string, prefs: UserPreferences): boolean {
   return false;
 }
 
+function parseHTMLJobRow(row: string, sourceUrl: string): JobListing | null {
+  const cells = row.match(/<td[^>]*>([\s\S]*?)<\/td>/g);
+  if (!cells || cells.length < 5) return null;
+  
+  const cleanCells = cells.map(cell => cell.replace(/<td[^>]*>/, '').replace(/<\/td>/, '').trim());
+  const hasTermsColumn = cleanCells.length >= 6;
+  
+  const companyCell = cleanCells[0];
+  const roleCell = cleanCells[1];
+  const locationCell = cleanCells[2];
+  const termsCell = hasTermsColumn ? cleanCells[3] : '';
+  const applicationCell = hasTermsColumn ? cleanCells[4] : cleanCells[3];
+  const ageCell = hasTermsColumn ? cleanCells[5] : cleanCells[4];
+  
+  let company = companyCell.replaceAll(/<[^>]*>|\[([^\]]+)\]\([^)]+\)|🔥/g, (match, p1) => p1 || '').trim();
+  let role = roleCell.replaceAll(/<[^>]*>|🎓|🛂|🇺🇸/g, '').trim();
+  let location = locationCell.replaceAll(/<details>.*?<\/details>|<[^>]*>|<\/br>/g, (match) => match === '</br>' ? ', ' : '').trim();
+  
+  if (!isUSLocation(location)) return null;
+  
+  const age = ageCell.replaceAll(/<[^>]*>/g, '').trim();
+  const ageInDays = parseAgeInDays(age);
+  if (ageInDays !== null && ageInDays > CONFIG.MAX_AGE_DAYS) return null;
+  
+  const hrefMatches = Array.from(applicationCell.matchAll(/href="([^"]+)"/g));
+  if (hrefMatches.length === 0) return null;
+  
+  let applicationLink = '';
+  for (const match of hrefMatches) {
+    if (!match[1].includes('simplify.jobs')) {
+      applicationLink = match[1];
+      break;
+    }
+  }
+  if (!applicationLink && hrefMatches.length > 0) applicationLink = hrefMatches[0][1];
+  if (!applicationLink) return null;
+  
+  const terms = termsCell ? termsCell.replaceAll(/<[^>]*>/g, '').trim() : 'N/A';
+  
+  return {
+    company: company || 'Unknown',
+    role: role || 'Unknown Role',
+    location,
+    terms,
+    applicationLink,
+    age,
+    dateAdded: new Date().toISOString(),
+    source: sourceUrl,
+  };
+}
+
 function parseHTMLTable(html: string, sourceUrl: string): JobListing[] {
   const jobs: JobListing[] = [];
   const tbodyMatch = html.match(/<tbody>([\s\S]*?)<\/tbody>/g);
@@ -360,73 +412,29 @@ function parseHTMLTable(html: string, sourceUrl: string): JobListing[] {
     if (!rows) continue;
     
     for (const row of rows) {
-      const cells = row.match(/<td[^>]*>([\s\S]*?)<\/td>/g);
-      if (!cells || cells.length < 5) continue;
-      
-      const cleanCells = cells.map(cell => cell.replace(/<td[^>]*>/, '').replace(/<\/td>/, '').trim());
-      const hasTermsColumn = cleanCells.length >= 6;
-      
-      const companyCell = cleanCells[0];
-      const roleCell = cleanCells[1];
-      const locationCell = cleanCells[2];
-      const termsCell = hasTermsColumn ? cleanCells[3] : '';
-      const applicationCell = hasTermsColumn ? cleanCells[4] : cleanCells[3];
-      const ageCell = hasTermsColumn ? cleanCells[5] : cleanCells[4];
-      
-      let company = companyCell.replaceAll(/<[^>]*>|\[([^\]]+)\]\([^)]+\)|🔥/g, (match, p1) => p1 || '').trim();
-      let role = roleCell.replaceAll(/<[^>]*>|🎓|🛂|🇺🇸/g, '').trim();
-      let location = locationCell.replaceAll(/<details>.*?<\/details>|<[^>]*>|<\/br>/g, (match) => match === '</br>' ? ', ' : '').trim();
-      
-      if (!isUSLocation(location)) continue;
-      
-      const age = ageCell.replaceAll(/<[^>]*>/g, '').trim();
-      const ageInDays = parseAgeInDays(age);
-      if (ageInDays !== null && ageInDays > CONFIG.MAX_AGE_DAYS) continue;
-      
-      const hrefMatches = Array.from(applicationCell.matchAll(/href="([^"]+)"/g));
-      if (hrefMatches.length === 0) continue;
-      
-      let applicationLink = '';
-      for (const match of hrefMatches) {
-        if (!match[1].includes('simplify.jobs')) {
-          applicationLink = match[1];
-          break;
-        }
+      const job = parseHTMLJobRow(row, sourceUrl);
+      if (job) {
+        jobs.push(job);
       }
-      if (!applicationLink && hrefMatches.length > 0) applicationLink = hrefMatches[0][1];
-      if (!applicationLink) continue;
-      
-      const terms = termsCell ? termsCell.replaceAll(/<[^>]*>/g, '').trim() : 'N/A';
-      
-      jobs.push({
-        company: company || 'Unknown',
-        role: role || 'Unknown Role',
-        location,
-        terms,
-        applicationLink,
-        age,
-        dateAdded: new Date().toISOString(),
-        source: sourceUrl,
-      });
     }
   }
   return jobs;
 }
 
 async function fetchJobsFromGitHub(sourceUrl: string, displayUrl: string): Promise<JobListing[]> {
-  const spinner = ora(`Fetching ${displayUrl}...`).start();
+  const spinner = ora("Fetching " + displayUrl + "...").start();
   
   try {
     const response = await fetch(sourceUrl);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) throw new Error("HTTP " + response.status);
     const content = await response.text();
     const jobs = parseHTMLTable(content, displayUrl);
     
-    spinner.succeed(`Found ${chalk.bold.green(jobs.length)} jobs from ${displayUrl}`);
+    spinner.succeed("Found " + chalk.bold.green(jobs.length) + " jobs from " + displayUrl);
     return jobs;
   } catch (error) {
-    spinner.fail(`Failed to fetch ${displayUrl}`);
-  console.error(chalk.red(`Error: ${error}`));
+    spinner.fail("Failed to fetch " + displayUrl);
+    console.error(chalk.red("Error: " + error));
     return [];
   }
 }
@@ -516,6 +524,49 @@ function sortJobsByDate(jobs: JobListing[], order: "newest" | "oldest"): JobList
  * Parse jobright-ai table format
  * Columns: Company, Job Title, Location, Work Model, Date Posted
  */
+function parseJobrightJobRow(line: string, sourceUrl: string, year: number): JobListing | null {
+  // Parse markdown table row: | Company | Job Title | Location | Work Model | Date |
+  const cells = line.split('|').map(c => c.trim()).filter(c => c.length > 0);
+  if (cells.length < 5) return null;
+  
+  const [companyCell, roleCell, locationCell, workModelCell, dateCell] = cells;
+  
+  // Handle continuation rows (↳ means same company as previous)
+  if (companyCell === '↳') return null; // Skip for now, or handle differently
+  
+  // Extract company name from **[Company](url)** or **[Company](url)**
+  const companyMatch = /\*\*\[([^\]]+)\]/.exec(companyCell);
+  const company = companyMatch ? companyMatch[1] : companyCell.replaceAll('**', '').trim();
+  
+  // Extract role and application link from **[Job Title](url)**
+  const roleMatch = /\*\*\[([^\]]+)\]\(([^)]+)\)/.exec(roleCell);
+  const role = roleMatch ? roleMatch[1] : roleCell.replaceAll('**', '').replaceAll(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim();
+  const applicationLink = roleMatch ? roleMatch[2] : '';
+  
+  // Location and work model
+  const location = locationCell;
+  const terms = workModelCell; // On Site, Remote, Hybrid
+  
+  // Parse date (e.g., "Dec 23")
+  const dateText = dateCell;
+  const parsedDate = parseJobrightDate(dateText, year);
+  
+  if (!applicationLink) return null;
+  if (!isUSLocation(location)) return null;
+
+  return {
+    company: company || 'Unknown',
+    role: role || 'Unknown Role',
+    location,
+    terms,
+    applicationLink,
+    age: dateText,
+    dateAdded: new Date().toISOString(),
+    source: sourceUrl,
+    parsedDate: parsedDate ?? undefined,
+  };
+}
+
 function parseJobrightAITable(markdown: string, sourceUrl: string, year: number): JobListing[] {
   const jobs: JobListing[] = [];
   
@@ -528,46 +579,10 @@ function parseJobrightAITable(markdown: string, sourceUrl: string, year: number)
     if (line.includes('Company') && line.includes('Job Title')) continue; // Header
     if (line.includes('-----')) continue; // Separator
     
-    // Parse markdown table row: | Company | Job Title | Location | Work Model | Date |
-    const cells = line.split('|').map(c => c.trim()).filter(c => c.length > 0);
-    if (cells.length < 5) continue;
-    
-    const [companyCell, roleCell, locationCell, workModelCell, dateCell] = cells;
-    
-    // Handle continuation rows (↳ means same company as previous)
-    if (companyCell === '↳') continue; // Skip for now, or handle differently
-    
-    // Extract company name from **[Company](url)** or **[Company](url)**
-    const companyMatch = /\*\*\[([^\]]+)\]/.exec(companyCell);
-    const company = companyMatch ? companyMatch[1] : companyCell.replaceAll('**', '').trim();
-    
-    // Extract role and application link from **[Job Title](url)**
-    const roleMatch = /\*\*\[([^\]]+)\]\(([^)]+)\)/.exec(roleCell);
-    const role = roleMatch ? roleMatch[1] : roleCell.replaceAll('**', '').replaceAll(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim();
-    const applicationLink = roleMatch ? roleMatch[2] : '';
-    
-    // Location and work model
-    const location = locationCell;
-    const terms = workModelCell; // On Site, Remote, Hybrid
-    
-    // Parse date (e.g., "Dec 23")
-    const dateText = dateCell;
-    const parsedDate = parseJobrightDate(dateText, year);
-    
-    if (!applicationLink) continue;
-    if (!isUSLocation(location)) continue;
-
-    jobs.push({
-      company: company || 'Unknown',
-      role: role || 'Unknown Role',
-      location,
-      terms,
-      applicationLink,
-      age: dateText,
-      dateAdded: new Date().toISOString(),
-      source: sourceUrl,
-      parsedDate: parsedDate ?? undefined,
-    });
+    const job = parseJobrightJobRow(line, sourceUrl, year);
+    if (job) {
+      jobs.push(job);
+    }
   }
   
   return jobs;
@@ -583,11 +598,11 @@ async function fetchJobrightAISources(): Promise<JobListing[]> {
   console.log(chalk.bold.cyan("\n🔍 Fetching jobright-ai sources..."));
   
   for (const source of CONFIG.JOBRIGHT_AI_SOURCES) {
-    const spinner = ora(`Fetching ${source.name}...`).start();
+    const spinner = ora("Fetching " + source.name + "...").start();
     const result = await fetchWithYearFallback(source.urlTemplate, currentYear);
     
     if (!result.success || !result.content) {
-      spinner.fail(`Failed to fetch ${source.name}: ${result.error}`);
+      spinner.fail("Failed to fetch " + source.name + ": " + result.error);
       continue;
     }
     
@@ -595,7 +610,7 @@ async function fetchJobrightAISources(): Promise<JobListing[]> {
     const jobs = parseJobrightAITable(result.content, displayUrl, result.year);
     allJobs.push(...jobs);
     
-    spinner.succeed(`Found ${chalk.bold.green(jobs.length)} jobs from ${source.name} (${result.year})`);
+    spinner.succeed("Found " + chalk.bold.green(jobs.length) + " jobs from " + source.name + " (" + result.year + ")");
   }
   
   return sortJobsByDate(allJobs, CONFIG.JOB_ORDERING);
@@ -638,10 +653,10 @@ function showSessionSummary(): void {
   console.log("\n" + chalk.bold.magenta("╔" + "═".repeat(58) + "╗"));
   console.log(chalk.bold.magenta("║") + chalk.bold.white(" 📊  SESSION SUMMARY".padEnd(58)) + chalk.bold.magenta("║"));
   console.log(chalk.bold.magenta("╠" + "═".repeat(58) + "╣"));
-  console.log(chalk.bold.magenta("║") + chalk.white(`  Duration:            ${chalk.cyan(durationStr)}`).padEnd(67) + chalk.bold.magenta("║"));
-  console.log(chalk.bold.magenta("║") + chalk.white(`  Jobs Viewed:         ${chalk.yellow(currentSession.jobsViewed)}`).padEnd(67) + chalk.bold.magenta("║"));
-  console.log(chalk.bold.magenta("║") + chalk.white(`  Jobs Marked:         ${chalk.green(currentSession.jobsMarked)}`).padEnd(67) + chalk.bold.magenta("║"));
-  console.log(chalk.bold.magenta("║") + chalk.white(`  Batches Processed:   ${chalk.blue(currentSession.batchesProcessed)}`).padEnd(67) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(("  Duration:            " + chalk.cyan(durationStr)).padEnd(67)) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(("  Jobs Viewed:         " + chalk.yellow(currentSession.jobsViewed)).padEnd(67)) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(("  Jobs Marked:         " + chalk.green(currentSession.jobsMarked)).padEnd(67)) + chalk.bold.magenta("║"));
+  console.log(chalk.bold.magenta("║") + chalk.white(("  Batches Processed:   " + chalk.blue(currentSession.batchesProcessed)).padEnd(67)) + chalk.bold.magenta("║"));
   console.log(chalk.bold.magenta("╚" + "═".repeat(58) + "╝"));
   console.log("");
 }
@@ -651,24 +666,24 @@ function showSessionSummary(): void {
  */
 function displayJobBatch(batch: JobListing[], startIndex: number, totalJobs: number): void {
   console.log("\n" + chalk.bold.cyan("┌" + "─".repeat(58) + "┐"));
-  console.log(chalk.bold.cyan("│") + chalk.bold.white(` 📦 Batch [Jobs ${startIndex+1}-${startIndex + batch.length}] of ${totalJobs}`.padEnd(58)) + chalk.bold.cyan("│"));
+  console.log(chalk.bold.cyan("│") + chalk.bold.white((" 📦 Batch [Jobs " + (startIndex+1) + "-" + (startIndex + batch.length) + "] of " + totalJobs).padEnd(58)) + chalk.bold.cyan("│"));
   console.log(chalk.bold.cyan("└" + "─".repeat(58) + "┘"));
 
   let lastCompany = '';
   batch.forEach((job, idx) => {
-    const jobNum = chalk.bold.cyan(`${startIndex + idx + 1}.`);
+    const jobNum = chalk.bold.cyan((startIndex + idx + 1) + ".");
     const isSameCompany = job.company === lastCompany;
     const relTime = chalk.green(getRelativeTime(job.age));
     
     if (isSameCompany) {
       const role = chalk.yellow(job.role);
-      console.log(`\n${jobNum} ${chalk.gray('└─')} ${role}`);
-      console.log(chalk.gray(`      📍 ${job.location} ${chalk.dim('|')} 📅 ${job.terms} ${chalk.dim('|')} ⏰ ${relTime}`));
+      console.log("\n" + jobNum + " " + chalk.gray('└─') + " " + role);
+      console.log(chalk.gray("      📍 " + job.location + " " + chalk.dim('|') + " 📅 " + job.terms + " " + chalk.dim('|') + " ⏰ " + relTime));
     } else {
       const company = chalk.bold.white(job.company);
       const role = chalk.yellow(job.role);
-      console.log(`\n${jobNum} ${company} ${chalk.gray('·')} ${role}`);
-      console.log(chalk.gray(`   📍 ${job.location} ${chalk.dim('|')} 📅 ${job.terms} ${chalk.dim('|')} ⏰ ${relTime}`));
+      console.log("\n" + jobNum + " " + company + " " + chalk.gray('·') + " " + role);
+      console.log(chalk.gray("   📍 " + job.location + " " + chalk.dim('|') + " 📅 " + job.terms + " " + chalk.dim('|') + " ⏰ " + relTime));
       lastCompany = job.company;
     }
   });
@@ -681,13 +696,13 @@ function previewJob(job: JobListing): void {
   console.log("\n" + chalk.bold.blue("═".repeat(60)));
   console.log(chalk.bold.cyan("📋 JOB PREVIEW"));
   console.log(chalk.bold.blue("═".repeat(60)));
-  console.log(chalk.white(`Company:  ${chalk.bold(job.company)}`));
-  console.log(chalk.white(`Role:     ${chalk.yellow(job.role)}`));
-  console.log(chalk.white(`Location: ${chalk.gray(job.location)}`));
-  console.log(chalk.white(`Terms:    ${chalk.gray(job.terms)}`));
-  console.log(chalk.white(`Age:      ${chalk.green(getRelativeTime(job.age))}`));
-  console.log(chalk.white(`Link:     ${chalk.cyan(job.applicationLink)}`));
-  console.log(chalk.white(`Source:   ${chalk.dim(job.source)}`));
+  console.log(chalk.white("Company:  " + chalk.bold(job.company)));
+  console.log(chalk.white("Role:     " + chalk.yellow(job.role)));
+  console.log(chalk.white("Location: " + chalk.gray(job.location)));
+  console.log(chalk.white("Terms:    " + chalk.gray(job.terms)));
+  console.log(chalk.white("Age:      " + chalk.green(getRelativeTime(job.age))));
+  console.log(chalk.white("Link:     " + chalk.cyan(job.applicationLink)));
+  console.log(chalk.white("Source:   " + chalk.dim(job.source)));
   console.log(chalk.bold.blue("═".repeat(60)));
 }
 
@@ -701,7 +716,7 @@ async function exportToCSV(jobs: JobListing[], filename: string): Promise<void> 
   
   const headers = "Company,Role,Location,Terms,Age,Application Link,Source\n";
   const rows = jobs.map(job => {
-    const escape = (str: string) => `"${str.replaceAll('"', '""')}"`;
+    const escape = (str: string) => "\"" + str.replaceAll('"', '""') + "\"";
     return [
       escape(job.company),
       escape(job.role),
@@ -713,9 +728,9 @@ async function exportToCSV(jobs: JobListing[], filename: string): Promise<void> 
     ].join(',');
   }).join('\n');
   
-  const filepath = `${CONFIG.EXPORTS_DIR}/${filename}`;
+  const filepath = CONFIG.EXPORTS_DIR + "/" + filename;
   await writeFile(filepath, headers + rows, 'utf-8');
-  console.log(chalk.green(`\n✓ Exported ${jobs.length} jobs to ${filepath}`));
+  console.log(chalk.green("\n✓ Exported " + jobs.length + " jobs to " + filepath));
 }
 
 /**

@@ -68,6 +68,18 @@ class Main {
 			case "3d":
 				console.log(this.threedDistance(lat1, lng1, lat2, lng2, lat3, lng3));
 				break;
+			case "cosine":
+				console.log(this.cosineDistance(lat1, lng1, lat2, lng2));
+				break;
+			case "hamming":
+				console.log(this.hammingDistance(lat1, lng1, lat2, lng2));
+				break;
+			case "jaccard":
+				console.log(this.jaccardDistance(lat1, lng1, lat2, lng2));
+				break;
+			case "sorensen-dice":
+				console.log(this.sorensenDiceDistance(lat1, lng1, lat2, lng2));
+				break;
 			default:
 				console.log(`Unknown distance formula: ${option}`);
 				console.log(
@@ -180,7 +192,7 @@ class Main {
 			iter++;
 		}
 
-		if (iter >= iterLimit) return NaN; // formula failed to converge
+		if (iter >= iterLimit) return Number.NaN; // formula failed to converge
 
 		const uSq = (cosSqAlpha * (a * a - b * b)) / (b * b);
 		const A =
@@ -246,6 +258,83 @@ class Main {
 			lng3 - lng2,
 		);
 	}
+
+	private cosineDistance(
+		lat1: number,
+		lng1: number,
+		lat2: number,
+		lng2: number,
+	) {
+		const dotProduct = lat1 * lat2 + lng1 * lng2;
+		const magnitude1 = Math.hypot(lat1, lng1);
+		const magnitude2 = Math.hypot(lat2, lng2);
+		return 1 - dotProduct / (magnitude1 * magnitude2);
+	}
+
+	private hammingDistance(
+		n1: number,
+		n2: number,
+		n3: number,
+		n4: number,
+	) {
+		// Treat inputs as binary strings if they look like binary (0s and 1s only)
+		// Otherwise, treat as integers and compare bits?
+		// Given the image shows binary vectors, let's assume the user might pass binary-like numbers.
+		// But since we have 4 inputs (lat1, lng1, lat2, lng2), let's treat them as two vectors: [lat1, lng1] and [lat2, lng2].
+		// If they are just 0s and 1s, we can compare them directly.
+		
+		const vec1 = [n1, n2];
+		const vec2 = [n3, n4];
+		let distance = 0;
+		for (let i = 0; i < vec1.length; i++) {
+			if (vec1[i] !== vec2[i]) {
+				distance++;
+			}
+		}
+		return distance;
+	}
+
+	private jaccardDistance(
+		lat1: number,
+		lng1: number,
+		lat2: number,
+		lng2: number,
+	) {
+		const setA = new Set([lat1, lng1]);
+		const setB = new Set([lat2, lng2]);
+		
+		let intersection = 0;
+		for (const item of setA) {
+			if (setB.has(item)) {
+				intersection++;
+			}
+		}
+		
+		const union = setA.size + setB.size - intersection;
+		if (union === 0) return 0;
+		return 1 - intersection / union;
+	}
+
+	private sorensenDiceDistance(
+		lat1: number,
+		lng1: number,
+		lat2: number,
+		lng2: number,
+	) {
+		const setA = new Set([lat1, lng1]);
+		const setB = new Set([lat2, lng2]);
+		
+		let intersection = 0;
+		for (const item of setA) {
+			if (setB.has(item)) {
+				intersection++;
+			}
+		}
+		
+		const denominator = setA.size + setB.size;
+		if (denominator === 0) return 0;
+		return 1 - (2 * intersection) / denominator;
+	}
 }
 
-void new Main();
+new Main();
