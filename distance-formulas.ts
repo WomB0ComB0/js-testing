@@ -337,4 +337,4 @@ class Main {
 	}
 }
 
-new Main();
+void new Main();
