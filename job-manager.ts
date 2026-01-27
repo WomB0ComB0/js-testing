@@ -293,15 +293,26 @@ function parseAgeInDays(ageText: string): number | null {
 }
 
 function isUSLocation(location: string): boolean {
-  const usStates1 = /\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO)\b/i;
-  const usStates2 = /\b(MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\b/i;
-  const usStates3 = /\b(DC|PR|VI|GU|AS|MP)\b/i;
+  const usStates = new Set([
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO",
+    "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+    "DC", "PR", "VI", "GU", "AS", "MP"
+  ]);
+
   const usPatterns = /\b(USA|United States|U\.S\.|Remote.*USA?|Nationwide)\b/i;
   const nonUSPatterns1 = /\b(UK|United Kingdom|Canada|Germany|France|India|China|Japan|Australia|Europe|Asia|EMEA)\b/i;
   const nonUSPatterns2 = /\b(London|Toronto|Vancouver|Berlin|Paris|Munich|Bangalore|Beijing|Shanghai|Tokyo|Sydney|Melbourne|Edinburgh|Banbury)\b/i;
   
   if (nonUSPatterns1.test(location) || nonUSPatterns2.test(location)) return false;
-  return usStates1.test(location) || usStates2.test(location) || usStates3.test(location) || usPatterns.test(location);
+  if (usPatterns.test(location)) return true;
+
+  // Check for state codes
+  const words = location.split(/[\s,]+/);
+  for (const word of words) {
+    if (usStates.has(word.toUpperCase())) return true;
+  }
+
+  return false;
 }
 
 /**
@@ -322,7 +333,7 @@ function extractRoleKeywords(role: string): string[] {
   for (const pattern of rolePatterns) {
     if (pattern.test(normalized)) {
       // Clean up the regex source to look nice
-      const cleanName = pattern.source.replace(/\\b/g, '').replace(/\\/g, '').replace(/\[.*?\]/g, '');
+      const cleanName = pattern.source.replaceAll(/\\b/g, '').replaceAll(/\\/g, '').replaceAll(/\[.*?\]/g, '');
       keywords.push(cleanName);
     }
   }
@@ -1211,176 +1222,184 @@ async function openJobsInBatches(): Promise<void> {
         .trim()
         .toLowerCase();
 
-      // QUICK ACTIONS
-      
-      // 1-5: Mark specific job
-      if (answer >= '1' && answer <= '5') {
-        const jobIndex = Number.parseInt(answer, 10) - 1;
-        if (jobIndex < batch.length) {
-          const job = batch[jobIndex];
-          const links = [job.applicationLink];
-          saveUndoOperation('mark_single', links);
-          await markJobsAsProcessed(links);
-          console.log(chalk.green(`\n✓ Marked job #${startIndex + jobIndex + 1}: ${job.company} - ${job.role}`));
-          if (currentSession) currentSession.jobsMarked++;
-          const freshDb = await loadJobsDatabase();
-          db.unprocessed = freshDb.unprocessed;
-          continue;
-        } else {
-          console.log(chalk.yellow(`\n⚠ Invalid job number. This batch has ${batch.length} jobs.`));
-          continue;
-        }
-      }
-      
-      // s: Skip
-      if (answer === 's' || answer === 'skip') {
-        startIndex += CONFIG.BATCH_SIZE;
-        db.currentIndex = startIndex;
-        await saveJobsDatabase(db);
-        console.log(chalk.cyan("\n→ Skipped batch"));
-        if (currentSession) currentSession.batchesProcessed++;
-        continue;
-      }
-      
-      // a: Mark all
-      if (answer === 'a' || answer === 'all') {
-        const links = batch.map(j => j.applicationLink);
-        saveUndoOperation('mark_batch', links);
-        await markJobsAsProcessed(links);
-        console.log(chalk.bold.green(`\n✓ Marked all ${batch.length} jobs as processed!`));
-        if (currentSession) {
-          currentSession.jobsMarked += batch.length;
-          currentSession.batchesProcessed++;
-        }
-        const freshDb = await loadJobsDatabase();
-        db.unprocessed = freshDb.unprocessed;
-        continue;
-      }
-      
-      // p#: Preview
-      if (answer.startsWith('p')) {
-        const numStr = answer.substring(1).trim();
-        const jobIndex = Number.parseInt(numStr, 10) - 1;
-        if (!Number.isNaN(jobIndex) && jobIndex >= 0 && jobIndex < batch.length) {
-          const job = batch[jobIndex];
-          previewJob(job);
-          continue;
-        } else {
-          console.log(chalk.yellow("\n⚠ Invalid job number for preview"));
-          continue;
-        }
-      }
-      
-      // u: Undo
-      if (answer === 'u' || answer === 'undo') {
-        await performUndo();
-        const freshDb = await loadJobsDatabase();
-        db.unprocessed = freshDb.unprocessed;
-        continue;
-      }
-      
-      // /: Search (basic implementation)
-      if (answer === '/' || answer === 'search') {
-        const query = await rl.question(chalk.cyan("\nSearch (company or role): "));
-        const searchTerm = query.toLowerCase();
-        const filteredJobs = db.unprocessed.filter(job => 
-          job.company.toLowerCase().includes(searchTerm) || 
-          job.role.toLowerCase().includes(searchTerm)
-        );
-        
-        if (filteredJobs.length === 0) {
-          console.log(chalk.yellow(`\n⚠ No jobs found matching "${query}"`));
-        } else {
-          console.log(chalk.green(`\n✓ Found ${filteredJobs.length} jobs matching "${query}":`));
-          filteredJobs.slice(0, 10).forEach((job, idx) => {
-            console.log(chalk.white(`  ${idx + 1}. ${chalk.bold(job.company)} - ${chalk.yellow(job.role)}`));
-          });
-          if (filteredJobs.length > 10) {
-            console.log(chalk.gray(`  ... and ${filteredJobs.length - 10} more`));
-          }
-        }
-        continue;
-      }
-
-      // q: Quit
-      if (answer === 'q' || answer === 'quit') {
-        db.currentIndex = startIndex;
-        await saveJobsDatabase(db);
-        showSessionSummary();
-        console.log(chalk.green("\n👋 Goodbye!\n"));
-        break;
-      }
-
-      // m: Mark batch
-      if (answer === 'm' || answer === 'mark') {
-        const links = batch.map((job) => job.applicationLink);
-        saveUndoOperation('mark_batch', links);
-        await markJobsAsProcessed(links);
-        console.log(chalk.bold.green("\n✓ Batch marked as processed!"));
-        if (currentSession) {
-          currentSession.jobsMarked += batch.length;
-          currentSession.batchesProcessed++;
-        }
-        const freshDb = await loadJobsDatabase();
-        db.unprocessed = freshDb.unprocessed;
-        continue; 
-      }
-
-      // n: Next
-      if (answer === 'n' || answer === 'next' || answer === 'no') {
-        startIndex += CONFIG.BATCH_SIZE;
-        db.currentIndex = startIndex;
-        await saveJobsDatabase(db);
-        if (currentSession) currentSession.batchesProcessed++;
-        continue;
-      }
-
-      // y: Yes, open
-      if (answer.startsWith('y') || answer === 'yes') {
-        await Promise.all(
-          batch.map((job) => Bun.$`xdg-open ${job.applicationLink}`.nothrow())
-        );
-
-        const markAnswer = (
-          await rl.question(chalk.white("\nMark as processed? (y/n) "))
-        ).trim().toLowerCase();
-
-        if (markAnswer.startsWith('y')) {
-          const links = batch.map((job) => job.applicationLink);
-          saveUndoOperation('mark_batch', links);
-          await markJobsAsProcessed(links);
-          console.log(chalk.bold.green("\n✓ Batch processed!"));
-          if (currentSession) {
-            currentSession.jobsMarked += batch.length;
-            currentSession.batchesProcessed++;
-          }
-          const freshDb = await loadJobsDatabase();
-          db.unprocessed = freshDb.unprocessed;
-        } else {
-          startIndex += CONFIG.BATCH_SIZE;
-          db.currentIndex = startIndex;
-          await saveJobsDatabase(db);
-        }
-        continue;
-      }
-      
-      // Invalid command
-      console.log(chalk.yellow("\n⚠ Invalid command. Try: y/n/m/q or 1-5/s/a/p#/u/"));
-    }
-    
-    if (startIndex >= db.unprocessed.length && db.unprocessed.length > 0) {
-      console.log("\n" + chalk.bold.green("🎉 Reached end of job list!"));
-      const reset = await rl.question(chalk.bold.white("\n❯ ") + "Start over from beginning? (y/n) ");
-      if (reset.toLowerCase().startsWith('y')) {
-        db.currentIndex = 0;
-        await saveJobsDatabase(db);
-        console.log(chalk.green("\n✓ Reset to beginning.\n"));
+      const result = await handleBatchAction(answer, batch, startIndex, db, rl);
+      if (result.action === 'quit') break;
+      if (result.newIndex !== startIndex) {
+        startIndex = result.newIndex;
       }
     }
-
+  } catch (error) {
+    console.error(chalk.red("Error: " + error));
   } finally {
+    showSessionSummary();
     rl.close();
   }
+}
+
+async function handleBatchAction(
+  answer: string, 
+  batch: JobListing[], 
+  startIndex: number, 
+  db: JobsDatabase,
+  rl: readline.Interface
+): Promise<{ action: 'continue' | 'quit', newIndex: number }> {
+  // QUICK ACTIONS
+  
+  // 1-5: Mark specific job
+  if (answer >= '1' && answer <= '5') {
+    const jobIndex = Number.parseInt(answer, 10) - 1;
+    if (jobIndex < batch.length) {
+      const job = batch[jobIndex];
+      const links = [job.applicationLink];
+      saveUndoOperation('mark_single', links);
+      await markJobsAsProcessed(links);
+      console.log(chalk.green(`\n✓ Marked job #${startIndex + jobIndex + 1}: ${job.company} - ${job.role}`));
+      if (currentSession) currentSession.jobsMarked++;
+      const freshDb = await loadJobsDatabase();
+      db.unprocessed = freshDb.unprocessed;
+      return { action: 'continue', newIndex: startIndex };
+    } else {
+      console.log(chalk.yellow(`\n⚠ Invalid job number. This batch has ${batch.length} jobs.`));
+      return { action: 'continue', newIndex: startIndex };
+    }
+  }
+  
+  // s: Skip
+  if (answer === 's' || answer === 'skip') {
+    const newIndex = startIndex + CONFIG.BATCH_SIZE;
+    db.currentIndex = newIndex;
+    await saveJobsDatabase(db);
+    console.log(chalk.cyan("\n→ Skipped batch"));
+    if (currentSession) currentSession.batchesProcessed++;
+    return { action: 'continue', newIndex };
+  }
+  
+  // a: Mark all
+  if (answer === 'a' || answer === 'all') {
+    const links = batch.map(j => j.applicationLink);
+    saveUndoOperation('mark_batch', links);
+    await markJobsAsProcessed(links);
+    console.log(chalk.bold.green(`\n✓ Marked all ${batch.length} jobs as processed!`));
+    if (currentSession) {
+      currentSession.jobsMarked += batch.length;
+      currentSession.batchesProcessed++;
+    }
+    const freshDb = await loadJobsDatabase();
+    db.unprocessed = freshDb.unprocessed;
+    return { action: 'continue', newIndex: startIndex };
+  }
+      
+  // p#: Preview
+  if (answer.startsWith('p')) {
+    const numStr = answer.substring(1).trim();
+    const jobIndex = Number.parseInt(numStr, 10) - 1;
+    if (!Number.isNaN(jobIndex) && jobIndex >= 0 && jobIndex < batch.length) {
+      const job = batch[jobIndex];
+      previewJob(job);
+      return { action: 'continue', newIndex: startIndex };
+    } else {
+      console.log(chalk.yellow("\n⚠ Invalid job number for preview"));
+      return { action: 'continue', newIndex: startIndex };
+    }
+  }
+  
+  // u: Undo
+  if (answer === 'u' || answer === 'undo') {
+    await performUndo();
+    const freshDb = await loadJobsDatabase();
+    db.unprocessed = freshDb.unprocessed;
+    return { action: 'continue', newIndex: startIndex };
+  }
+  
+  // /: Search (basic implementation)
+  if (answer === '/' || answer === 'search') {
+    const query = await rl.question(chalk.cyan("\nSearch (company or role): "));
+    const searchTerm = query.toLowerCase();
+    const filteredJobs = db.unprocessed.filter(job => 
+      job.company.toLowerCase().includes(searchTerm) || 
+      job.role.toLowerCase().includes(searchTerm)
+    );
+    
+    if (filteredJobs.length === 0) {
+      console.log(chalk.yellow(`\n⚠ No jobs found matching "${query}"`));
+    } else {
+      console.log(chalk.green(`\n✓ Found ${filteredJobs.length} jobs matching "${query}":`));
+      filteredJobs.slice(0, 10).forEach((job, idx) => {
+        console.log(chalk.white(`  ${idx + 1}. ${chalk.bold(job.company)} - ${chalk.yellow(job.role)}`));
+      });
+      if (filteredJobs.length > 10) {
+        console.log(chalk.gray(`  ... and ${filteredJobs.length - 10} more`));
+      }
+    }
+    return { action: 'continue', newIndex: startIndex };
+  }
+
+  // q: Quit
+  if (answer === 'q' || answer === 'quit') {
+    db.currentIndex = startIndex;
+    await saveJobsDatabase(db);
+    showSessionSummary();
+    console.log(chalk.green("\n👋 Goodbye!\n"));
+    return { action: 'quit', newIndex: startIndex };
+  }
+
+  // m: Mark batch
+  if (answer === 'm' || answer === 'mark') {
+    const links = batch.map((job) => job.applicationLink);
+    saveUndoOperation('mark_batch', links);
+    await markJobsAsProcessed(links);
+    console.log(chalk.bold.green("\n✓ Batch marked as processed!"));
+    if (currentSession) {
+      currentSession.jobsMarked += batch.length;
+      currentSession.batchesProcessed++;
+    }
+    const freshDb = await loadJobsDatabase();
+    db.unprocessed = freshDb.unprocessed;
+    return { action: 'continue', newIndex: startIndex }; 
+  }
+
+  // n: Next
+  if (answer === 'n' || answer === 'next' || answer === 'no') {
+    const newIndex = startIndex + CONFIG.BATCH_SIZE;
+    db.currentIndex = newIndex;
+    await saveJobsDatabase(db);
+    if (currentSession) currentSession.batchesProcessed++;
+    return { action: 'continue', newIndex };
+  }
+
+  // y: Yes, open
+  if (answer.startsWith('y') || answer === 'yes') {
+    await Promise.all(
+      batch.map((job) => Bun.$`xdg-open ${job.applicationLink}`.nothrow())
+    );
+
+    const markAnswer = (
+      await rl.question(chalk.white("\nMark as processed? (y/n) "))
+    ).trim().toLowerCase();
+
+    if (markAnswer.startsWith('y')) {
+      const links = batch.map((job) => job.applicationLink);
+      saveUndoOperation('mark_batch', links);
+      await markJobsAsProcessed(links);
+      console.log(chalk.bold.green("\n✓ Batch processed!"));
+      if (currentSession) {
+        currentSession.jobsMarked += batch.length;
+        currentSession.batchesProcessed++;
+      }
+      const freshDb = await loadJobsDatabase();
+      db.unprocessed = freshDb.unprocessed;
+      return { action: 'continue', newIndex: startIndex };
+    } else {
+      const newIndex = startIndex + CONFIG.BATCH_SIZE;
+      db.currentIndex = newIndex;
+      await saveJobsDatabase(db);
+      return { action: 'continue', newIndex };
+    }
+  }
+  
+  // Invalid command
+  console.log(chalk.yellow("\n⚠ Invalid command. Try: y/n/m/q or 1-5/s/a/p#/u/"));
+  return { action: 'continue', newIndex: startIndex };
 }
 
 // --- BOILERPLATE HELPERS ---
@@ -1443,6 +1462,60 @@ async function resetData(): Promise<void> {
   rl.close();
 }
 
+async function handleAnalyticsCommand() {
+  const db = await loadJobsDatabase();
+  if (db.unprocessed.length > 0) {
+    analyzeJobs(db.unprocessed);
+  } else {
+    console.log(chalk.yellow("No jobs to analyze. Run 'update' first."));
+  }
+}
+
+async function handleExportCommand(arg: string) {
+  if (!arg || !['csv', 'json'].includes(arg)) {
+    console.log(chalk.yellow("\nUsage: bun run job-manager.ts export <csv|json>"));
+    return;
+  }
+  const exportDb = await loadJobsDatabase();
+  if (exportDb.unprocessed.length === 0) {
+    console.log(chalk.yellow("No jobs to export. Run 'update' first."));
+    return;
+  }
+  const timestamp = new Date().toISOString().split('T')[0];
+  if (arg === 'csv') {
+    await exportToCSV(exportDb.unprocessed, `jobs_${timestamp}.csv`);
+  } else {
+    await exportToJSON(exportDb.unprocessed, `jobs_${timestamp}.json`);
+  }
+}
+
+async function handlePresetCommand(arg: string) {
+  if (!arg) {
+    await listFilterPresets();
+    return;
+  }
+  if (arg === 'list') {
+    await listFilterPresets();
+  } else if (arg === 'save') {
+    const name = process.argv[4];
+    if (!name) {
+      console.log(chalk.yellow("\nUsage: bun run job-manager.ts preset save <name>"));
+      return;
+    }
+    const prefs = await loadUserPreferences();
+    await saveFilterPreset(name, prefs);
+  } else if (arg === 'load') {
+    const name = process.argv[4];
+    if (!name) {
+      console.log(chalk.yellow("\nUsage: bun run job-manager.ts preset load <name>"));
+      return;
+    }
+    await loadFilterPreset(name);
+  } else {
+    console.log(chalk.yellow("\nUsage: bun run job-manager.ts preset <list|save|load> [name]"));
+  }
+}
+
 async function main() {
   await initializeDataDirectory();
   const command = process.argv[2] || "help";
@@ -1462,62 +1535,17 @@ async function main() {
       break;
       
     case "insights":
-    case "analytics": {
-      const db = await loadJobsDatabase();
-      if (db.unprocessed.length > 0) {
-        analyzeJobs(db.unprocessed);
-      } else {
-        console.log(chalk.yellow("No jobs to analyze. Run 'update' first."));
-      }
+    case "analytics":
+      await handleAnalyticsCommand();
       break;
-    }
       
-    case "export": {
-      if (!arg || !['csv', 'json'].includes(arg)) {
-        console.log(chalk.yellow("\nUsage: bun run job-manager.ts export <csv|json>"));
-        break;
-      }
-      const exportDb = await loadJobsDatabase();
-      if (exportDb.unprocessed.length === 0) {
-        console.log(chalk.yellow("No jobs to export. Run 'update' first."));
-        break;
-      }
-      const timestamp = new Date().toISOString().split('T')[0];
-      if (arg === 'csv') {
-        await exportToCSV(exportDb.unprocessed, `jobs_${timestamp}.csv`);
-      } else {
-        await exportToJSON(exportDb.unprocessed, `jobs_${timestamp}.json`);
-      }
+    case "export":
+      await handleExportCommand(arg);
       break;
-    }
       
-    case "preset": {
-      if (!arg) {
-        await listFilterPresets();
-        break;
-      }
-      if (arg === 'list') {
-        await listFilterPresets();
-      } else if (arg === 'save') {
-        const name = process.argv[4];
-        if (!name) {
-          console.log(chalk.yellow("\nUsage: bun run job-manager.ts preset save <name>"));
-          break;
-        }
-        const prefs = await loadUserPreferences();
-        await saveFilterPreset(name, prefs);
-      } else if (arg === 'load') {
-        const name = process.argv[4];
-        if (!name) {
-          console.log(chalk.yellow("\nUsage: bun run job-manager.ts preset load <name>"));
-          break;
-        }
-        await loadFilterPreset(name);
-      } else {
-        console.log(chalk.yellow("\nUsage: bun run job-manager.ts preset <list|save|load> [name]"));
-      }
+    case "preset":
+      await handlePresetCommand(arg);
       break;
-    }
       
     case "reset": 
       await resetData(); 
