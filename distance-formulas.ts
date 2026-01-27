@@ -21,34 +21,28 @@
  */
 
 // @ts-nocheck
-import { $, argv } from "bun";
+import { argv } from "bun";
 
-function selfExecute<T extends { new (...args: any[]): {} }>(
-	constructor: T,
-): T {
-	new constructor();
-	return constructor;
-}
 
-@selfExecute
+
 class Main {
 	private readonly argv = argv.slice(2) as [string, ...number[]];
 
 	constructor() {
-		if (require.main === module) {
+		if (import.meta.main) {
 			this.run();
 		}
 	}
 
 	run() {
 		const [option = "euclidean", ...coordinates] = this.argv;
-		const lat1 = parseFloat(coordinates[0] || 0);
-		const lng1 = parseFloat(coordinates[1] || 0);
-		const lat2 = parseFloat(coordinates[2] || 0);
-		const lng2 = parseFloat(coordinates[3] || 0);
-		const lng3 = parseFloat(coordinates[4] || 0);
-		const lat3 = parseFloat(coordinates[5] || 0);
-		const p = parseFloat(coordinates[6] || 2);
+		const lat1 = Number.parseFloat(coordinates[0] || 0);
+		const lng1 = Number.parseFloat(coordinates[1] || 0);
+		const lat2 = Number.parseFloat(coordinates[2] || 0);
+		const lng2 = Number.parseFloat(coordinates[3] || 0);
+		const lng3 = Number.parseFloat(coordinates[4] || 0);
+		const lat3 = Number.parseFloat(coordinates[5] || 0);
+
 
 		switch (option) {
 			case "euclidean":
@@ -67,7 +61,7 @@ class Main {
 				console.log(this.chebyshevDistance(lat1, lng1, lat2, lng2));
 				break;
 			case "minkowski": {
-				const p = parseFloat(coordinates[6] || 2);
+				const p = Number.parseFloat(coordinates[6] || 2);
 				console.log(this.minkowskiDistance(lat1, lng1, lat2, lng2, p));
 				break;
 			}
@@ -91,7 +85,7 @@ class Main {
 	) {
 		const dLat = lat2 - lat1;
 		const dLng = lng2 - lng1;
-		return Math.sqrt(dLat * dLat + dLng * dLng);
+		return Math.hypot(dLat, dLng);
 	}
 
 	private haversineDistance(
@@ -156,9 +150,9 @@ class Main {
 		while (Math.abs(lambda - lambdaP) > 1e-12 && iter < iterLimit) {
 			const sinLambda = Math.sin(lambda),
 				cosLambda = Math.cos(lambda);
-			sinSigma = Math.sqrt(
-				(cosU2 * sinLambda) ** 2 +
-					(cosU1 * sinU2 - sinU1 * cosU2 * cosLambda) ** 2,
+			sinSigma = Math.hypot(
+				cosU2 * sinLambda,
+				cosU1 * sinU2 - sinU1 * cosU2 * cosLambda,
 			);
 
 			if (sinSigma === 0) return 0; // coincident points
@@ -169,7 +163,7 @@ class Main {
 			cosSqAlpha = 1 - sinAlpha * sinAlpha;
 
 			cos2SigmaM = cosSigma - (2 * sinU1 * sinU2) / cosSqAlpha;
-			if (isNaN(cos2SigmaM)) cos2SigmaM = 0; // equatorial line
+			if (Number.isNaN(cos2SigmaM)) cos2SigmaM = 0; // equatorial line
 
 			const C = (f / 16) * cosSqAlpha * (4 + f * (4 - 3 * cosSqAlpha));
 			lambdaP = lambda;
@@ -245,11 +239,13 @@ class Main {
 		lat3: number,
 		lng3: number,
 	) {
-		return Math.sqrt(
-			(lat1 - lat2) ** 2 +
-				(lng1 - lng2) ** 2 +
-				(lat3 - lat2) ** 2 +
-				(lng3 - lng2) ** 2,
+		return Math.hypot(
+			lat1 - lat2,
+			lng1 - lng2,
+			lat3 - lat2,
+			lng3 - lng2,
 		);
 	}
 }
+
+void new Main();

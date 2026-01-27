@@ -217,8 +217,8 @@ async function loadUserPreferences(): Promise<UserPreferences> {
         rejectedTitles: new Set(parsed.rejectedTitles || []),
       };
     }
-  } catch (error) {
-    // Ignore error
+  } catch {
+    // Ignore error (file may not exist)
   }
   return { acceptedTitles: new Set(), rejectedTitles: new Set() };
 }
@@ -242,7 +242,7 @@ async function loadProcessedJobs(): Promise<ProcessedJobsData> {
         totalProcessed: parsed.totalProcessed || 0,
       };
     }
-  } catch (error) {
+  } catch {
     // Ignore
   }
   return { processedLinks: new Set(), lastUpdated: new Date().toISOString(), totalProcessed: 0 };
@@ -263,7 +263,7 @@ async function loadJobsDatabase(): Promise<JobsDatabase> {
       const data = await readFile(CONFIG.JOBS_FILE, "utf-8");
       return JSON.parse(data);
     }
-  } catch (error) {
+  } catch {
     // Ignore
   }
   return {
@@ -282,9 +282,9 @@ async function saveJobsDatabase(db: JobsDatabase): Promise<void> {
 
 function parseAgeInDays(ageText: string): number | null {
   const trimmed = ageText.trim().toLowerCase();
-  const match = trimmed.match(/(\d+)\s*(d|day|days|mo|month|months|w|week|weeks)/i);
+  const match = /(\d+)\s*(d|day|days|mo|month|months|w|week|weeks)/i.exec(trimmed);
   if (!match) return null;
-  const value = parseInt(match[1]);
+  const value = Number.parseInt(match[1], 10);
   const unit = match[2].toLowerCase();
   if (unit.startsWith('d')) return value;
   if (unit.startsWith('mo')) return value * 30;
@@ -293,12 +293,14 @@ function parseAgeInDays(ageText: string): number | null {
 }
 
 function isUSLocation(location: string): boolean {
-  const usStates = /\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC|PR|VI|GU|AS|MP)\b/i;
+  const usStates1 = /\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO)\b/i;
+  const usStates2 = /\b(MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC|PR|VI|GU|AS|MP)\b/i;
   const usPatterns = /\b(USA|United States|U\.S\.|Remote.*USA?|Nationwide)\b/i;
-  const nonUSPatterns = /\b(UK|United Kingdom|Canada|Germany|France|India|China|Japan|Australia|Europe|Asia|EMEA|London|Toronto|Vancouver|Berlin|Paris|Munich|Bangalore|Beijing|Shanghai|Tokyo|Sydney|Melbourne|Edinburgh|Banbury)\b/i;
+  const nonUSPatterns1 = /\b(UK|United Kingdom|Canada|Germany|France|India|China|Japan|Australia|Europe|Asia|EMEA)\b/i;
+  const nonUSPatterns2 = /\b(London|Toronto|Vancouver|Berlin|Paris|Munich|Bangalore|Beijing|Shanghai|Tokyo|Sydney|Melbourne|Edinburgh|Banbury)\b/i;
   
-  if (nonUSPatterns.test(location)) return false;
-  return usStates.test(location) || usPatterns.test(location);
+  if (nonUSPatterns1.test(location) || nonUSPatterns2.test(location)) return false;
+  return usStates1.test(location) || usStates2.test(location) || usPatterns.test(location);
 }
 
 /**
@@ -319,7 +321,7 @@ function extractRoleKeywords(role: string): string[] {
   for (const pattern of rolePatterns) {
     if (pattern.test(normalized)) {
       // Clean up the regex source to look nice
-      const cleanName = pattern.source.replace(/\\b/g, '').replace(/\\/g, '').replace(/\[.*?\]/g, '');
+      const cleanName = pattern.source.replaceAll('\\b', '').replaceAll('\\', '').replaceAll(/\[.*?\]/g, '');
       keywords.push(cleanName);
     }
   }
@@ -371,13 +373,13 @@ function parseHTMLTable(html: string, sourceUrl: string): JobListing[] {
       const applicationCell = hasTermsColumn ? cleanCells[4] : cleanCells[3];
       const ageCell = hasTermsColumn ? cleanCells[5] : cleanCells[4];
       
-      let company = companyCell.replace(/<[^>]*>|\[([^\]]+)\]\([^)]+\)|🔥/g, (match, p1) => p1 || '').trim();
-      let role = roleCell.replace(/<[^>]*>|🎓|🛂|🇺🇸/g, '').trim();
-      let location = locationCell.replace(/<details>.*?<\/details>|<[^>]*>|<\/br>/g, (match) => match === '</br>' ? ', ' : '').trim();
+      let company = companyCell.replaceAll(/<[^>]*>|\[([^\]]+)\]\([^)]+\)|🔥/g, (match, p1) => p1 || '').trim();
+      let role = roleCell.replaceAll(/<[^>]*>|🎓|🛂|🇺🇸/g, '').trim();
+      let location = locationCell.replaceAll(/<details>.*?<\/details>|<[^>]*>|<\/br>/g, (match) => match === '</br>' ? ', ' : '').trim();
       
       if (!isUSLocation(location)) continue;
       
-      const age = ageCell.replace(/<[^>]*>/g, '').trim();
+      const age = ageCell.replaceAll(/<[^>]*>/g, '').trim();
       const ageInDays = parseAgeInDays(age);
       if (ageInDays !== null && ageInDays > CONFIG.MAX_AGE_DAYS) continue;
       
@@ -394,7 +396,7 @@ function parseHTMLTable(html: string, sourceUrl: string): JobListing[] {
       if (!applicationLink && hrefMatches.length > 0) applicationLink = hrefMatches[0][1];
       if (!applicationLink) continue;
       
-      const terms = termsCell ? termsCell.replace(/<[^>]*>/g, '').trim() : 'N/A';
+      const terms = termsCell ? termsCell.replaceAll(/<[^>]*>/g, '').trim() : 'N/A';
       
       jobs.push({
         company: company || 'Unknown',
@@ -487,13 +489,13 @@ function parseJobrightDate(dateStr: string, year: number): Date | null {
     jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
   };
   
-  const match = dateStr.trim().match(/^(\w{3})\s+(\d{1,2})$/i);
+  const match = /^(\w{3})\s+(\d{1,2})$/i.exec(dateStr.trim());
   if (!match) return null;
   
   const month = months[match[1].toLowerCase()];
-  const day = parseInt(match[2]);
+  const day = Number.parseInt(match[2], 10);
   
-  if (month === undefined || isNaN(day)) return null;
+  if (month === undefined || Number.isNaN(day)) return null;
   
   return new Date(year, month, day);
 }
@@ -536,12 +538,12 @@ function parseJobrightAITable(markdown: string, sourceUrl: string, year: number)
     if (companyCell === '↳') continue; // Skip for now, or handle differently
     
     // Extract company name from **[Company](url)** or **[Company](url)**
-    const companyMatch = companyCell.match(/\*\*\[([^\]]+)\]/);
-    const company = companyMatch ? companyMatch[1] : companyCell.replace(/\*\*/g, '').trim();
+    const companyMatch = /\*\*\[([^\]]+)\]/.exec(companyCell);
+    const company = companyMatch ? companyMatch[1] : companyCell.replaceAll('**', '').trim();
     
     // Extract role and application link from **[Job Title](url)**
-    const roleMatch = roleCell.match(/\*\*\[([^\]]+)\]\(([^)]+)\)/);
-    const role = roleMatch ? roleMatch[1] : roleCell.replace(/\*\*/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim();
+    const roleMatch = /\*\*\[([^\]]+)\]\(([^)]+)\)/.exec(roleCell);
+    const role = roleMatch ? roleMatch[1] : roleCell.replaceAll('**', '').replaceAll(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim();
     const applicationLink = roleMatch ? roleMatch[2] : '';
     
     // Location and work model
@@ -633,7 +635,7 @@ function showSessionSummary(): void {
   const duration = Date.now() - currentSession.startTime;
   const durationStr = ms(duration, { long: true });
   
-  console.log("\\n" + chalk.bold.magenta("╔" + "═".repeat(58) + "╗"));
+  console.log("\n" + chalk.bold.magenta("╔" + "═".repeat(58) + "╗"));
   console.log(chalk.bold.magenta("║") + chalk.bold.white(" 📊  SESSION SUMMARY".padEnd(58)) + chalk.bold.magenta("║"));
   console.log(chalk.bold.magenta("╠" + "═".repeat(58) + "╣"));
   console.log(chalk.bold.magenta("║") + chalk.white(`  Duration:            ${chalk.cyan(durationStr)}`).padEnd(67) + chalk.bold.magenta("║"));
@@ -645,6 +647,51 @@ function showSessionSummary(): void {
 }
 
 /**
+ * Display a batch of jobs
+ */
+function displayJobBatch(batch: JobListing[], startIndex: number, totalJobs: number): void {
+  console.log("\n" + chalk.bold.cyan("┌" + "─".repeat(58) + "┐"));
+  console.log(chalk.bold.cyan("│") + chalk.bold.white(` 📦 Batch [Jobs ${startIndex+1}-${startIndex + batch.length}] of ${totalJobs}`.padEnd(58)) + chalk.bold.cyan("│"));
+  console.log(chalk.bold.cyan("└" + "─".repeat(58) + "┘"));
+
+  let lastCompany = '';
+  batch.forEach((job, idx) => {
+    const jobNum = chalk.bold.cyan(`${startIndex + idx + 1}.`);
+    const isSameCompany = job.company === lastCompany;
+    const relTime = chalk.green(getRelativeTime(job.age));
+    
+    if (isSameCompany) {
+      const role = chalk.yellow(job.role);
+      console.log(`\n${jobNum} ${chalk.gray('└─')} ${role}`);
+      console.log(chalk.gray(`      📍 ${job.location} ${chalk.dim('|')} 📅 ${job.terms} ${chalk.dim('|')} ⏰ ${relTime}`));
+    } else {
+      const company = chalk.bold.white(job.company);
+      const role = chalk.yellow(job.role);
+      console.log(`\n${jobNum} ${company} ${chalk.gray('·')} ${role}`);
+      console.log(chalk.gray(`   📍 ${job.location} ${chalk.dim('|')} 📅 ${job.terms} ${chalk.dim('|')} ⏰ ${relTime}`));
+      lastCompany = job.company;
+    }
+  });
+}
+
+/**
+ * Preview a single job
+ */
+function previewJob(job: JobListing): void {
+  console.log("\n" + chalk.bold.blue("═".repeat(60)));
+  console.log(chalk.bold.cyan("📋 JOB PREVIEW"));
+  console.log(chalk.bold.blue("═".repeat(60)));
+  console.log(chalk.white(`Company:  ${chalk.bold(job.company)}`));
+  console.log(chalk.white(`Role:     ${chalk.yellow(job.role)}`));
+  console.log(chalk.white(`Location: ${chalk.gray(job.location)}`));
+  console.log(chalk.white(`Terms:    ${chalk.gray(job.terms)}`));
+  console.log(chalk.white(`Age:      ${chalk.green(getRelativeTime(job.age))}`));
+  console.log(chalk.white(`Link:     ${chalk.cyan(job.applicationLink)}`));
+  console.log(chalk.white(`Source:   ${chalk.dim(job.source)}`));
+  console.log(chalk.bold.blue("═".repeat(60)));
+}
+
+/**
  * Export jobs to CSV
  */
 async function exportToCSV(jobs: JobListing[], filename: string): Promise<void> {
@@ -652,9 +699,9 @@ async function exportToCSV(jobs: JobListing[], filename: string): Promise<void> 
     await mkdir(CONFIG.EXPORTS_DIR, { recursive: true });
   }
   
-  const headers = "Company,Role,Location,Terms,Age,Application Link,Source\\n";
+  const headers = "Company,Role,Location,Terms,Age,Application Link,Source\n";
   const rows = jobs.map(job => {
-    const escape = (str: string) => `"${str.replace(/"/g, '""')}"`;
+    const escape = (str: string) => `"${str.replaceAll('"', '""')}"`;
     return [
       escape(job.company),
       escape(job.role),
@@ -664,11 +711,11 @@ async function exportToCSV(jobs: JobListing[], filename: string): Promise<void> 
       escape(job.applicationLink),
       escape(job.source),
     ].join(',');
-  }).join('\\n');
+  }).join('\n');
   
   const filepath = `${CONFIG.EXPORTS_DIR}/${filename}`;
   await writeFile(filepath, headers + rows, 'utf-8');
-  console.log(chalk.green(`\\n✓ Exported ${jobs.length} jobs to ${filepath}`));
+  console.log(chalk.green(`\n✓ Exported ${jobs.length} jobs to ${filepath}`));
 }
 
 /**
@@ -687,7 +734,7 @@ async function exportToJSON(jobs: JobListing[], filename: string): Promise<void>
   
   const filepath = `${CONFIG.EXPORTS_DIR}/${filename}`;
   await writeFile(filepath, JSON.stringify(data, null, 2), 'utf-8');
-  console.log(chalk.green(`\\n✓ Exported ${jobs.length} jobs to ${filepath}`));
+  console.log(chalk.green(`\n✓ Exported ${jobs.length} jobs to ${filepath}`));
 }
 
 /**
@@ -719,7 +766,7 @@ function analyzeJobs(jobs: JobListing[]): void {
   });
   
   // Calculate average age
-  const ages = jobs.map(j => parseAgeInDays(j.age)).filter(a => a !== null) as number[];
+  const ages = jobs.map(j => parseAgeInDays(j.age)).filter((a): a is number => a !== null);
   const avgAge = ages.length > 0 ? Math.round(ages.reduce((a, b) => a + b, 0) / ages.length) : 0;
   
   // Top 5 of each
@@ -733,7 +780,7 @@ function analyzeJobs(jobs: JobListing[]): void {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5);
   
-  console.log("\\n" + chalk.bold.cyan("╔" + "═".repeat(58) + "╗"));
+  console.log("\n" + chalk.bold.cyan("╔" + "═".repeat(58) + "╗"));
   console.log(chalk.bold.cyan("║") + chalk.bold.white(" 📈  JOB INSIGHTS & ANALYTICS".padEnd(58)) + chalk.bold.cyan("║"));
   console.log(chalk.bold.cyan("╠" + "═".repeat(58) + "╣"));
   console.log(chalk.bold.cyan("║") + chalk.bold.yellow(" Top Locations:".padEnd(58)) + chalk.bold.cyan("║"));
@@ -773,20 +820,19 @@ function saveUndoOperation(type: UndoOperation['type'], links: string[]): void {
  */
 async function performUndo(): Promise<boolean> {
   if (!lastUndoOperation) {
-    console.log(chalk.yellow("\\n⚠ No operation to undo."));
+    console.log(chalk.yellow("\n⚠ No operation to undo."));
     return false;
   }
   
   const age = Date.now() - lastUndoOperation.timestamp;
   if (age > 60000) { // 1 minute timeout
-    console.log(chalk.yellow("\\n⚠ Undo expired (>1 minute old)."));
+    console.log(chalk.yellow("\n⚠ Undo expired (>1 minute old)."));
     lastUndoOperation = null;
     return false;
   }
   
   // Restore jobs by removing from processed and adding back to unprocessed
   const processedData = await loadProcessedJobs();
-  const db = await loadJobsDatabase();
   
   // Remove from processed
   lastUndoOperation.links.forEach(link => {
@@ -820,9 +866,7 @@ async function saveFilterPreset(name: string, prefs: UserPreferences): Promise<v
     createdAt: new Date().toISOString(),
   };
   
-  if (!prefs.presets) {
-    prefs.presets = [];
-  }
+  prefs.presets ??= [];
   
   // Replace if exists
   const existingIndex = prefs.presets.findIndex(p => p.name === name);
@@ -833,7 +877,7 @@ async function saveFilterPreset(name: string, prefs: UserPreferences): Promise<v
   }
   
   await saveUserPreferences(prefs);
-  console.log(chalk.green(`\\n✓ Saved filter preset: "${name}"`));
+  console.log(chalk.green(`\n✓ Saved filter preset: "${name}"`));
 }
 
 /**
@@ -843,13 +887,13 @@ async function loadFilterPreset(name: string): Promise<UserPreferences | null> {
   const prefs = await loadUserPreferences();
   
   if (!prefs.presets) {
-    console.log(chalk.yellow("\\n⚠ No presets found."));
+    console.log(chalk.yellow("\n⚠ No presets found."));
     return null;
   }
   
   const preset = prefs.presets.find(p => p.name === name);
   if (!preset) {
-    console.log(chalk.yellow(`\\n⚠ Preset "${name}" not found.`));
+    console.log(chalk.yellow(`\n⚠ Preset "${name}" not found.`));
     return null;
   }
   
@@ -857,7 +901,7 @@ async function loadFilterPreset(name: string): Promise<UserPreferences | null> {
   prefs.rejectedTitles = new Set(preset.rejectedTitles);
   
   await saveUserPreferences(prefs);
-  console.log(chalk.green(`\\n✓ Loaded filter preset: "${name}"`));
+  console.log(chalk.green(`\n✓ Loaded filter preset: "${name}"`));
   
   return prefs;
 }
@@ -869,11 +913,11 @@ async function listFilterPresets(): Promise<void> {
   const prefs = await loadUserPreferences();
   
   if (!prefs.presets || prefs.presets.length === 0) {
-    console.log(chalk.yellow("\\nNo saved presets."));
+    console.log(chalk.yellow("\nNo saved presets."));
     return;
   }
   
-  console.log("\\n" + chalk.bold.blue("Saved Filter Presets:"));
+  console.log("\n" + chalk.bold.blue("Saved Filter Presets:"));
   prefs.presets.forEach((preset, idx) => {
     console.log(chalk.cyan(`  ${idx + 1}. ${chalk.bold(preset.name)}`));
     console.log(chalk.gray(`     Accepted: ${preset.acceptedTitles.length}, Rejected: ${preset.rejectedTitles.length}`));
@@ -1125,9 +1169,7 @@ async function openJobsInBatches(): Promise<void> {
 
     // Use stored index
     let startIndex = db.currentIndex || 0;
-    if (startIndex === undefined || startIndex === null) {
-      startIndex = 0;
-    }
+    startIndex ??= 0;
     
     console.log("\n" + chalk.bold.blue("╔" + "═".repeat(58) + "╗"));
     console.log(chalk.bold.blue("║") + chalk.bold.cyan(" 💼  JOB APPLICATION QUEUE".padEnd(58)) + chalk.bold.blue("║"));
@@ -1146,31 +1188,8 @@ async function openJobsInBatches(): Promise<void> {
         currentSession.jobsViewed += batch.length;
       }
       
-      console.log("\n" + chalk.bold.cyan("┌" + "─".repeat(58) + "┐"));
-      console.log(chalk.bold.cyan("│") + chalk.bold.white(` 📦 Batch [Jobs ${startIndex+1}-${endIndex}] of ${db.unprocessed.length}`.padEnd(58)) + chalk.bold.cyan("│"));
-      console.log(chalk.bold.cyan("└" + "─".repeat(58) + "┘"));
-
-      // Display jobs with smart company grouping (O(n) single pass)
-      let lastCompany = '';
-      batch.forEach((job, idx) => {
-        const jobNum = chalk.bold.cyan(`${startIndex + idx + 1}.`);
-        const isSameCompany = job.company === lastCompany;
-        const relTime = chalk.green(getRelativeTime(job.age));
-        
-        if (isSameCompany) {
-          // Grouped job under same company - show with continuation arrow
-          const role = chalk.yellow(job.role);
-          console.log(`\n${jobNum} ${chalk.gray('└─')} ${role}`);
-          console.log(chalk.gray(`      📍 ${job.location} ${chalk.dim('|')} 📅 ${job.terms} ${chalk.dim('|')} ⏰ ${relTime}`));
-        } else {
-          // New company - show full header
-          const company = chalk.bold.white(job.company);
-          const role = chalk.yellow(job.role);
-          console.log(`\n${jobNum} ${company} ${chalk.gray('·')} ${role}`);
-          console.log(chalk.gray(`   📍 ${job.location} ${chalk.dim('|')} 📅 ${job.terms} ${chalk.dim('|')} ⏰ ${relTime}`));
-          lastCompany = job.company;
-        }
-      });
+      // Display jobs with smart company grouping
+      displayJobBatch(batch, startIndex, db.unprocessed.length);
 
       console.log("\n" + chalk.gray("─".repeat(60)));
       const answer = (await rl.question(chalk.bold.white("\n❯ ") + "Your action: "))
@@ -1181,7 +1200,7 @@ async function openJobsInBatches(): Promise<void> {
       
       // 1-5: Mark specific job
       if (answer >= '1' && answer <= '5') {
-        const jobIndex = parseInt(answer) - 1;
+        const jobIndex = Number.parseInt(answer, 10) - 1;
         if (jobIndex < batch.length) {
           const job = batch[jobIndex];
           const links = [job.applicationLink];
@@ -1226,20 +1245,10 @@ async function openJobsInBatches(): Promise<void> {
       // p#: Preview
       if (answer.startsWith('p')) {
         const numStr = answer.substring(1).trim();
-        const jobIndex = parseInt(numStr) - 1;
-        if (!isNaN(jobIndex) && jobIndex >= 0 && jobIndex < batch.length) {
+        const jobIndex = Number.parseInt(numStr, 10) - 1;
+        if (!Number.isNaN(jobIndex) && jobIndex >= 0 && jobIndex < batch.length) {
           const job = batch[jobIndex];
-          console.log("\n" + chalk.bold.blue("═".repeat(60)));
-          console.log(chalk.bold.cyan("📋 JOB PREVIEW"));
-          console.log(chalk.bold.blue("═".repeat(60)));
-          console.log(chalk.white(`Company:  ${chalk.bold(job.company)}`));
-          console.log(chalk.white(`Role:     ${chalk.yellow(job.role)}`));
-          console.log(chalk.white(`Location: ${chalk.gray(job.location)}`));
-          console.log(chalk.white(`Terms:    ${chalk.gray(job.terms)}`));
-          console.log(chalk.white(`Age:      ${chalk.green(getRelativeTime(job.age))}`));
-          console.log(chalk.white(`Link:     ${chalk.cyan(job.applicationLink)}`));
-          console.log(chalk.white(`Source:   ${chalk.dim(job.source)}`));
-          console.log(chalk.bold.blue("═".repeat(60)));
+          previewJob(job);
           continue;
         } else {
           console.log(chalk.yellow("\n⚠ Invalid job number for preview"));
@@ -1438,7 +1447,7 @@ async function main() {
       break;
       
     case "insights":
-    case "analytics":
+    case "analytics": {
       const db = await loadJobsDatabase();
       if (db.unprocessed.length > 0) {
         analyzeJobs(db.unprocessed);
@@ -1446,8 +1455,9 @@ async function main() {
         console.log(chalk.yellow("No jobs to analyze. Run 'update' first."));
       }
       break;
+    }
       
-    case "export":
+    case "export": {
       if (!arg || !['csv', 'json'].includes(arg)) {
         console.log(chalk.yellow("\nUsage: bun run job-manager.ts export <csv|json>"));
         break;
@@ -1464,8 +1474,9 @@ async function main() {
         await exportToJSON(exportDb.unprocessed, `jobs_${timestamp}.json`);
       }
       break;
+    }
       
-    case "preset":
+    case "preset": {
       if (!arg) {
         await listFilterPresets();
         break;
@@ -1491,6 +1502,7 @@ async function main() {
         console.log(chalk.yellow("\nUsage: bun run job-manager.ts preset <list|save|load> [name]"));
       }
       break;
+    }
       
     case "reset": 
       await resetData(); 
@@ -1501,4 +1513,4 @@ async function main() {
   }
 }
 
-main().catch(console.error);
+await main();
