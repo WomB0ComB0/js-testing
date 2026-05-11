@@ -277,6 +277,79 @@ interface ElevationResult {
 }
 
 /**
+ * Cell tower observation for the Geolocation API.
+ * @see https://developers.google.com/maps/documentation/geolocation/overview#cell_tower_object
+ */
+interface CellTower {
+	cellId: number;
+	locationAreaCode: number;
+	mobileCountryCode: number;
+	mobileNetworkCode: number;
+	age?: number;
+	signalStrength?: number;
+	timingAdvance?: number;
+}
+
+/**
+ * WiFi access point observation for the Geolocation API.
+ * @see https://developers.google.com/maps/documentation/geolocation/overview#wifi_access_point_object
+ */
+interface WifiAccessPoint {
+	macAddress: string;
+	signalStrength?: number;
+	age?: number;
+	channel?: number;
+	signalToNoiseRatio?: number;
+}
+
+/**
+ * A point returned by the Roads API (snapToRoads, nearestRoads).
+ */
+interface SnappedPoint {
+	location: {
+		latitude: number;
+		longitude: number;
+	};
+	originalIndex?: number;
+	placeId: string;
+}
+
+/**
+ * Speed limit data returned by the Roads API.
+ */
+interface SpeedLimit {
+	placeId: string;
+	speedLimit: number;
+	units: "KPH" | "MPH";
+}
+
+/**
+ * Marker for the Static Maps API.
+ */
+interface StaticMapMarker {
+	location: string | { lat: number; lng: number };
+	color?: string;
+	label?: string;
+	size?: "tiny" | "mid" | "small" | "normal";
+}
+
+/**
+ * Options for building a Static Maps API URL.
+ */
+interface StaticMapOptions {
+	size: string;
+	center?: string | { lat: number; lng: number };
+	zoom?: number;
+	scale?: 1 | 2;
+	format?: "png" | "png8" | "png32" | "gif" | "jpg" | "jpg-baseline";
+	maptype?: "roadmap" | "satellite" | "terrain" | "hybrid";
+	language?: string;
+	region?: string;
+	markers?: StaticMapMarker[];
+	path?: string;
+}
+
+/**
  * Interface representing a timezone result
  * @interface TimeZoneResult
  * @property {number} dstOffset - Daylight savings offset in seconds
@@ -339,6 +412,14 @@ class GoogleMapsService {
 		"https://maps.googleapis.com/maps/api/elevation/json";
 	private readonly timeZoneBaseUrl =
 		"https://maps.googleapis.com/maps/api/timezone/json";
+	private readonly roadsSnapBaseUrl =
+		"https://roads.googleapis.com/v1/snapToRoads";
+	private readonly roadsNearestBaseUrl =
+		"https://roads.googleapis.com/v1/nearestRoads";
+	private readonly roadsSpeedLimitsBaseUrl =
+		"https://roads.googleapis.com/v1/speedLimits";
+	private readonly staticMapBaseUrl =
+		"https://maps.googleapis.com/maps/api/staticmap";
 
 	/**
 	 * Creates a new GoogleMapsService instance
@@ -792,12 +873,16 @@ class GoogleMapsService {
 	async getCurrentLocation(
 		options: {
 			considerIp?: boolean;
-			cellTowers?: any[];
-			wifiAccessPoints?: any[];
+			cellTowers?: CellTower[];
+			wifiAccessPoints?: WifiAccessPoint[];
 		} = {},
 	): Promise<GeolocationResult | null> {
 		try {
-			const payload: any = {};
+			const payload: {
+				considerIp?: boolean;
+				cellTowers?: CellTower[];
+				wifiAccessPoints?: WifiAccessPoint[];
+			} = {};
 
 			if (options.considerIp !== undefined) {
 				payload.considerIp = options.considerIp;
@@ -1180,6 +1265,227 @@ class GoogleMapsService {
 		}
 	}
 
+	/**
+	 * Reverse geocodes coordinates into a human-readable address.
+	 * @param coordinates - Latitude/longitude pair to reverse-geocode.
+	 * @returns The first matching address, or null if none found.
+	 * @throws Error including Google's `error_message` when the request fails.
+	 */
+	async geocodeCoordinates(coordinates: {
+		lat: number;
+		lng: number;
+	}): Promise<GeocodingResult | null> {
+		try {
+			const response = await axios.get(this.geocodingBaseUrl, {
+				params: {
+					latlng: `${coordinates.lat},${coordinates.lng}`,
+					key: this.apiKey,
+				},
+			});
+
+			if (response.data.status !== "OK") {
+				console.error(
+					`Reverse geocoding failed: ${response.data.status}${
+						response.data.error_message
+							? ` — ${response.data.error_message}`
+							: ""
+					}`,
+				);
+				return null;
+			}
+
+			return response.data.results?.[0] || null;
+		} catch (error: unknown) {
+			console.error("Reverse Geocoding Error:", error);
+			throw new Error(
+				`Failed to reverse geocode: ${GoogleMapsService.describeError(error)}`,
+			);
+		}
+	}
+
+	/**
+	 * Snaps GPS points to the most likely road geometry.
+	 * @param path - Ordered path of up to 100 points.
+	 * @param interpolate - When true, returns additional points between provided samples.
+	 * @returns Snapped points, or null if none returned.
+	 * @see https://developers.google.com/maps/documentation/roads/snap
+	 */
+	async snapToRoads(
+		path: { lat: number; lng: number }[],
+		interpolate = false,
+	): Promise<SnappedPoint[] | null> {
+		try {
+			const pathStr = path.map((p) => `${p.lat},${p.lng}`).join("|");
+			const response = await axios.get(this.roadsSnapBaseUrl, {
+				params: {
+					path: pathStr,
+					interpolate,
+					key: this.apiKey,
+				},
+			});
+			return response.data.snappedPoints ?? null;
+		} catch (error: unknown) {
+			console.error("Snap To Roads Error:", error);
+			throw new Error(
+				`Failed to snap to roads: ${GoogleMapsService.describeError(error)}`,
+			);
+		}
+	}
+
+	/**
+	 * Finds the nearest road segment for each provided point.
+	 * Unlike {@link snapToRoads} the points are treated as independent observations,
+	 * not as an ordered path.
+	 * @param points - Up to 100 independent coordinates.
+	 */
+	async getNearestRoads(
+		points: { lat: number; lng: number }[],
+	): Promise<SnappedPoint[] | null> {
+		try {
+			const pointsStr = points.map((p) => `${p.lat},${p.lng}`).join("|");
+			const response = await axios.get(this.roadsNearestBaseUrl, {
+				params: {
+					points: pointsStr,
+					key: this.apiKey,
+				},
+			});
+			return response.data.snappedPoints ?? null;
+		} catch (error: unknown) {
+			console.error("Nearest Roads Error:", error);
+			throw new Error(
+				`Failed to find nearest roads: ${GoogleMapsService.describeError(error)}`,
+			);
+		}
+	}
+
+	/**
+	 * Looks up posted speed limits for the given road segments (Roads API place IDs).
+	 * @param placeIds - Road-segment place IDs (typically obtained via snapToRoads).
+	 */
+	async getSpeedLimits(placeIds: string[]): Promise<SpeedLimit[] | null> {
+		try {
+			const params = new URLSearchParams();
+			params.append("key", this.apiKey);
+			for (const placeId of placeIds) {
+				params.append("placeId", placeId);
+			}
+			const response = await axios.get(
+				`${this.roadsSpeedLimitsBaseUrl}?${params.toString()}`,
+			);
+			return response.data.speedLimits ?? null;
+		} catch (error: unknown) {
+			console.error("Speed Limits Error:", error);
+			throw new Error(
+				`Failed to fetch speed limits: ${GoogleMapsService.describeError(error)}`,
+			);
+		}
+	}
+
+	/**
+	 * Builds a Static Maps API URL. This is a pure URL builder — no network call.
+	 * @param options - Static map configuration (size is required).
+	 * @see https://developers.google.com/maps/documentation/maps-static/start
+	 */
+	getStaticMapUrl(options: StaticMapOptions): string {
+		const params = new URLSearchParams();
+
+		params.append("size", options.size);
+
+		if (options.center) {
+			params.append(
+				"center",
+				typeof options.center === "string"
+					? options.center
+					: `${options.center.lat},${options.center.lng}`,
+			);
+		}
+		if (options.zoom !== undefined)
+			params.append("zoom", options.zoom.toString());
+		if (options.scale !== undefined)
+			params.append("scale", options.scale.toString());
+		if (options.format) params.append("format", options.format);
+		if (options.maptype) params.append("maptype", options.maptype);
+		if (options.language) params.append("language", options.language);
+		if (options.region) params.append("region", options.region);
+		if (options.path) params.append("path", options.path);
+
+		if (options.markers) {
+			for (const marker of options.markers) {
+				const parts: string[] = [];
+				if (marker.size) parts.push(`size:${marker.size}`);
+				if (marker.color) parts.push(`color:${marker.color}`);
+				if (marker.label) parts.push(`label:${marker.label}`);
+				const loc =
+					typeof marker.location === "string"
+						? marker.location
+						: `${marker.location.lat},${marker.location.lng}`;
+				parts.push(loc);
+				params.append("markers", parts.join("|"));
+			}
+		}
+
+		params.append("key", this.apiKey);
+		return `${this.staticMapBaseUrl}?${params.toString()}`;
+	}
+
+	/**
+	 * Decodes a Google encoded polyline string into latitude/longitude pairs.
+	 * Useful for plotting Directions API `overview_polyline.points` or
+	 * `steps[].polyline.points`.
+	 * @param encoded - Encoded polyline string.
+	 * @see https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+	 */
+	static decodePolyline(encoded: string): { lat: number; lng: number }[] {
+		const points: { lat: number; lng: number }[] = [];
+		let index = 0;
+		let lat = 0;
+		let lng = 0;
+
+		while (index < encoded.length) {
+			let result = 0;
+			let shift = 0;
+			let byte: number;
+			do {
+				byte = encoded.charCodeAt(index++) - 63;
+				result |= (byte & 0x1f) << shift;
+				shift += 5;
+			} while (byte >= 0x20);
+			lat += result & 1 ? ~(result >> 1) : result >> 1;
+
+			result = 0;
+			shift = 0;
+			do {
+				byte = encoded.charCodeAt(index++) - 63;
+				result |= (byte & 0x1f) << shift;
+				shift += 5;
+			} while (byte >= 0x20);
+			lng += result & 1 ? ~(result >> 1) : result >> 1;
+
+			points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+		}
+
+		return points;
+	}
+
+	/**
+	 * Extracts a useful message from an axios/Google error.
+	 * Maps Platform returns `error_message`; Roads/Geolocation return `error.message`.
+	 */
+	private static describeError(error: unknown): string {
+		if (axios.isAxiosError(error)) {
+			const data = error.response?.data as
+				| {
+						error_message?: string;
+						error?: { message?: string };
+				  }
+				| undefined;
+			const detail =
+				data?.error_message ?? data?.error?.message ?? error.message;
+			return `${error.response?.status ?? ""} ${detail}`.trim();
+		}
+		return error instanceof Error ? error.message : String(error);
+	}
+
 	// Test methods for the new APIs
 	async testStreetView(location: string | { lat: number; lng: number }) {
 		try {
@@ -1302,6 +1608,57 @@ async function main() {
 
 		console.log("\n===== Testing Time Zone API =====");
 		await mapsService.testTimeZone({ lat: 39.7391536, lng: -104.9847034 }); // Denver
+
+		console.log("\n===== Testing Reverse Geocoding =====");
+		const reverse = await mapsService.geocodeCoordinates({
+			lat: 37.422,
+			lng: -122.084,
+		});
+		console.log({
+			formatted_address: reverse?.formatted_address,
+			place_id: reverse?.place_id,
+		});
+
+		console.log("\n===== Testing Roads API: snapToRoads =====");
+		const snapped = await mapsService.snapToRoads(
+			[
+				{ lat: 40.714728, lng: -73.998672 },
+				{ lat: 40.71412, lng: -73.99956 },
+				{ lat: 40.71354, lng: -74.00044 },
+			],
+			true,
+		);
+		console.log({
+			snappedCount: snapped?.length ?? 0,
+			firstPlaceId: snapped?.[0]?.placeId,
+		});
+
+		console.log("\n===== Testing Roads API: nearestRoads =====");
+		const nearest = await mapsService.getNearestRoads([
+			{ lat: 40.714728, lng: -73.998672 },
+		]);
+		console.log({
+			nearestCount: nearest?.length ?? 0,
+			firstPlaceId: nearest?.[0]?.placeId,
+		});
+
+		console.log("\n===== Testing Static Maps URL builder =====");
+		const staticUrl = mapsService.getStaticMapUrl({
+			size: "600x400",
+			center: { lat: 37.422, lng: -122.084 },
+			zoom: 14,
+			markers: [
+				{ location: { lat: 37.422, lng: -122.084 }, color: "red", label: "G" },
+			],
+		});
+		console.log(staticUrl);
+
+		console.log("\n===== Testing Polyline decoder =====");
+		// "Bear Mountain Bridge" sample polyline from Google's docs
+		const decoded = GoogleMapsService.decodePolyline(
+			"_p~iF~ps|U_ulLnnqC_mqNvxq`@",
+		);
+		console.log({ pointCount: decoded.length, points: decoded });
 	} catch (error) {
 		console.error("Test failed:", error);
 	}
