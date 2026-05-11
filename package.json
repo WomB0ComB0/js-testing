@@ -68,7 +68,7 @@
 		"jsonwebtoken": "^9.0.2",
 		"jszip": "^3.10.1",
 		"libsodium-wrappers": "^0.7.15",
-		"logixlysia": "^5.1.0",
+		"logixlysia": "^6.3.2",
 		"luxon": "^3.6.1",
 		"marked": "^15.0.12",
 		"minimatch": "^10.0.3",
