@@ -25,7 +25,7 @@ import { generateText } from "ai";
 import { file, readableStreamToJSON } from "bun";
 import dotenv from "dotenv";
 import { z } from "zod";
-import { GoogleMapsService } from "./map.js";
+import { GoogleMapsService } from "./tech-week/map.js";
 
 dotenv.config({ path: ".env" });
 
