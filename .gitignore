@@ -48,3 +48,5 @@ resume.md
 !package.json
 afro*
 ui-captures/
+*.har
+itinerary.data.js
