@@ -20,7 +20,7 @@
  * SOFTWARE.
  */
 
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { openai } from "@ai-sdk/openai";
 import { generateText } from "ai";
 import dotenv from "dotenv";
@@ -36,19 +36,82 @@ const PROJECT_ROOT = join(SCRIPT_DIR, "..");
 dotenv.config({ path: join(PROJECT_ROOT, ".env") });
 
 // ---------------------------------------------------------------------------
+// CLI args
+// ---------------------------------------------------------------------------
+
+function getArg(flag: string): string | undefined {
+	const idx = process.argv.indexOf(flag);
+	if (idx === -1) return undefined;
+	const next = process.argv[idx + 1];
+	if (!next || next.startsWith("--")) return undefined;
+	return next;
+}
+
+function hasFlag(flag: string): boolean {
+	return process.argv.includes(flag);
+}
+
+const CITY_LABEL = getArg("--city") ?? "NYC";
+const CITY_SLUG = CITY_LABEL.toLowerCase().replace(/\s+/g, "-");
+const IS_DEFAULT_CITY = CITY_LABEL === "NYC";
+
+function citySuffixed(defaultName: string, suffixedName: string): string {
+	return IS_DEFAULT_CITY ? defaultName : suffixedName;
+}
+
+const NO_OPEN = hasFlag("--no-open");
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-const SOURCE_FILE = join(SCRIPT_DIR, "tech-week-calendar.json");
-const GEOCODE_CACHE_FILE = join(SCRIPT_DIR, "tech-week-geocoded.json");
-const RESPONSE_FILE = join(SCRIPT_DIR, "response.md");
-const ITINERARY_HTML_FILE = join(SCRIPT_DIR, "itinerary.html");
-const ITINERARY_DATA_FILE = join(SCRIPT_DIR, "itinerary.data.js");
+const SOURCE_FILE = resolve(
+	getArg("--calendar") ??
+		join(
+			SCRIPT_DIR,
+			citySuffixed(
+				"tech-week-calendar.json",
+				`tech-week-${CITY_SLUG}-calendar.json`,
+			),
+		),
+);
+const GEOCODE_CACHE_FILE = resolve(
+	getArg("--geocode-cache") ??
+		join(
+			SCRIPT_DIR,
+			citySuffixed(
+				"tech-week-geocoded.json",
+				`tech-week-${CITY_SLUG}-geocoded.json`,
+			),
+		),
+);
+const RESPONSE_FILE = resolve(
+	getArg("--response") ??
+		join(SCRIPT_DIR, citySuffixed("response.md", `response-${CITY_SLUG}.md`)),
+);
+const ITINERARY_HTML_FILE = resolve(
+	getArg("--html") ??
+		join(
+			SCRIPT_DIR,
+			citySuffixed("itinerary.html", `itinerary-${CITY_SLUG}.html`),
+		),
+);
+const ITINERARY_DATA_FILE = resolve(
+	getArg("--data") ??
+		join(
+			SCRIPT_DIR,
+			citySuffixed("itinerary.data.js", `itinerary-${CITY_SLUG}.data.js`),
+		),
+);
 
 const MAX_CANDIDATES = 100;
 const EVENT_DURATION_MIN = 120;
-const NYC_AVG_SPEED_KMH = 18;
-const NYC_TIMEZONE_OFFSET = "-04:00";
+// Average urban door-to-door speed for travel-time estimation. NYC and Boston
+// both land around 15-20 km/h with a mix of walk/transit/rideshare.
+const AVG_SPEED_KMH = Number(getArg("--avg-speed-kmh") ?? 18);
+// Eastern Daylight Time covers both NYC Tech Week (June) and Boston Tech Week
+// (late May), so the same offset works for both cities.
+const TIMEZONE_OFFSET = getArg("--tz-offset") ?? "-04:00";
 
 // Drop any event whose priorityScore is below this. Set to 0 to disable
 // (i.e., consider every event regardless of how well its description matches
@@ -106,7 +169,7 @@ type CalendarEvent = z.infer<typeof CalendarEventSchema>;
 
 function eventStartMs(event: CalendarEvent): number {
 	return new Date(
-		`${event.date}T${event.time}${NYC_TIMEZONE_OFFSET}`,
+		`${event.date}T${event.time}${TIMEZONE_OFFSET}`,
 	).getTime();
 }
 
@@ -142,17 +205,23 @@ async function geocodeLocations(
 	mapsService: GoogleMapsService,
 ): Promise<Map<string, Coordinates2D>> {
 	const cache = await loadGeocodeCache();
-	const unique = new Set<string>();
+	// Pair each unique neighborhood/location with the city we saw it in so we
+	// can disambiguate names that exist in multiple cities (e.g. "Chinatown",
+	// "Downtown") when geocoding. Cache keys remain bare-location since each
+	// calendar file is single-city and writes to its own cache file.
+	const unique = new Map<string, string>();
 	for (const event of events) {
-		if (event.location) unique.add(event.location);
+		if (event.location && !unique.has(event.location)) {
+			unique.set(event.location, event.city);
+		}
 	}
 
 	let added = 0;
-	for (const location of unique) {
+	for (const [location, city] of unique) {
 		if (location in cache) continue;
 		try {
 			const result = await mapsService.geocodeAddress(
-				`${location}, New York City, NY`,
+				`${location}, ${city}`,
 			);
 			cache[location] = result
 				? {
@@ -185,7 +254,7 @@ async function geocodeLocations(
 
 function estimatedTravelMinutes(a: Coordinates2D, b: Coordinates2D): number {
 	const km = Distance.haversine(a, b);
-	return (km / NYC_AVG_SPEED_KMH) * 60;
+	return (km / AVG_SPEED_KMH) * 60;
 }
 
 function findNonOverlappingEvents(
@@ -428,10 +497,14 @@ window.ITINERARY_DATA = ${json};
  * HTML can be shared as-is and reused for any itinerary by swapping the
  * data file — no code changes required.
  */
-function buildItineraryHtml(): string {
+function buildItineraryHtml(
+	city: string,
+	dataFileName: string,
+): string {
 	const escapeAttr = (s: string): string =>
 		s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-	const title = escapeAttr("Itinerary");
+	const title = escapeAttr(`${city} Tech Week 2026 — Itinerary`);
+	const safeDataSrc = escapeAttr(dataFileName);
 
 	return `<!DOCTYPE html>
 <html lang="en">
@@ -482,7 +555,7 @@ function buildItineraryHtml(): string {
 <div id="app">
   <aside id="sidebar">
     <header>
-      <h1>NYC Tech Week 2026</h1>
+      <h1>${escapeAttr(`${city} Tech Week 2026`)}</h1>
       <div class="sub" id="summary"></div>
     </header>
     <div id="days"></div>
@@ -490,7 +563,7 @@ function buildItineraryHtml(): string {
   </aside>
   <div id="map"></div>
 </div>
-<script src="itinerary.data.js"></script>
+<script src="${safeDataSrc}"></script>
 <script>
 if (!window.ITINERARY_DATA) {
   document.body.innerHTML =
@@ -841,7 +914,7 @@ document.head.appendChild(s);
 			url: event.externalHref ?? "",
 		}));
 
-		const prompt = `Given this pre-filtered itinerary of NYC Tech Week 2026 events,
+		const prompt = `Given this pre-filtered itinerary of ${CITY_LABEL} Tech Week 2026 events,
 identify the highest-signal events from the candidate pool.
 
 The candidates were already filtered to those whose descriptions matched a priority
@@ -886,7 +959,7 @@ reader can click into the interactive route for each day.`;
 				error,
 			);
 			text =
-				`# NYC Tech Week 2026 — Itinerary\n\n` +
+				`# ${CITY_LABEL} Tech Week 2026 — Itinerary\n\n` +
 				`${selected.length} non-overlapping events selected.\n\n` +
 				(itineraryMapUrl ? `![map](${itineraryMapUrl})\n\n` : "") +
 				dayDeeplinksMd +
@@ -910,22 +983,33 @@ reader can click into the interactive route for each day.`;
 		if (apiKey) {
 			// HTML is a reusable static template; data lives in a sibling .js file
 			// so the same HTML can be shared and reused for different itineraries.
-			const html = buildItineraryHtml();
+			// Pass the data filename so the HTML's <script src> matches the
+			// city-specific data file written alongside it.
+			const dataFileName = basename(ITINERARY_DATA_FILE);
+			const html = buildItineraryHtml(CITY_LABEL, dataFileName);
 			const dataJs = buildItineraryDataJs(selected, coords, apiKey);
 			await Bun.write(ITINERARY_HTML_FILE, html);
 			await Bun.write(ITINERARY_DATA_FILE, dataJs);
 			console.log(`Wrote interactive itinerary → ${ITINERARY_HTML_FILE}`);
 			console.log(`Wrote itinerary data       → ${ITINERARY_DATA_FILE}`);
-			Bun.spawn({ cmd: ["/bin/sh", "-c", `xdg-open "${ITINERARY_HTML_FILE}"`] });
+			if (!NO_OPEN) {
+				Bun.spawn({
+					cmd: ["/bin/sh", "-c", `xdg-open "${ITINERARY_HTML_FILE}"`],
+				});
+			}
 		}
 
-		Bun.spawn({ cmd: ["/bin/sh", "-c", `xdg-open "${RESPONSE_FILE}"`] });
+		if (!NO_OPEN) {
+			Bun.spawn({ cmd: ["/bin/sh", "-c", `xdg-open "${RESPONSE_FILE}"`] });
 
-		for (const event of selected) {
-			if (!event.externalHref) continue;
-			Bun.spawn({
-				cmd: ["/bin/sh", "-c", `xdg-open "${event.externalHref}"`],
-			});
+			for (const event of selected) {
+				if (!event.externalHref) continue;
+				Bun.spawn({
+					cmd: ["/bin/sh", "-c", `xdg-open "${event.externalHref}"`],
+				});
+			}
+		} else {
+			console.log(`(--no-open) Skipping browser-open for ${selected.length} events`);
 		}
 	} catch (error) {
 		console.error("An unexpected error occurred:", error);

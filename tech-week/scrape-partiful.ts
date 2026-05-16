@@ -11,17 +11,34 @@
  * To force a re-scrape pass `--refresh`.
  */
 
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
+
+// ---------------------------------------------------------------------------
+// CLI args
+// ---------------------------------------------------------------------------
+
+function getArg(flag: string): string | undefined {
+	const idx = process.argv.indexOf(flag);
+	if (idx === -1) return undefined;
+	const next = process.argv[idx + 1];
+	if (!next || next.startsWith("--")) return undefined;
+	return next;
+}
+
+// Paths resolve relative to this script so it works from any CWD.
+const SCRIPT_DIR = import.meta.dir;
+const CALENDAR_FILE = resolve(
+	getArg("--calendar") ?? join(SCRIPT_DIR, "tech-week-calendar.json"),
+);
+const PRIORITY_FILE = resolve(
+	getArg("--priority") ?? join(SCRIPT_DIR, "tech-week-priority.md"),
+);
+const CITY_LABEL = getArg("--city") ?? "NYC";
 
 // ---------------------------------------------------------------------------
 // Tunables
 // ---------------------------------------------------------------------------
-
-// Paths resolve relative to this script so it works from any CWD.
-const SCRIPT_DIR = import.meta.dir;
-const CALENDAR_FILE = join(SCRIPT_DIR, "tech-week-calendar.json");
-const PRIORITY_FILE = join(SCRIPT_DIR, "tech-week-priority.md");
 
 const CONCURRENCY = 8;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -36,10 +53,53 @@ const USER_AGENT =
 // founder/startup stage, investors/fundraising, AI/ML, deep tech / hardware,
 // engineering, builder community. Tailor to your own interests.
 const PRIORITY_KEYWORDS: string[] = [
-	// --- Stage / fundraising ---
-	"founder",
+    // --- Stage / fundraising ---
+    "founder",
+    "founders",
+    "startup",
+    "startups",
+    "seed",
+    "pre-seed",
+    "series A",
+    "early stage",
+    "raising",
+    "fund",
+    "fundraise",
+    "fundraising",
+    "demo day",
+    "pitch",
+    "GTM",
+// --- Investors ---
+    "VC",
+    "VCs",
+    "venture capital",
+    "investor",
+    "investors",
+    "angel",
+    "LP",
+    "GP",
+// --- AI / ML ---
+    "AI",
+    "ML",
+    "LLM",
+    "machine learning",
+    "deep learning",
+    "agents",
+    "agentic",
+    "GenAI",
+// --- Tech themes ---
+    "deep tech",
+    "frontier tech",
+    "hardware",
+    "robotics",
+    "infrastructure",
+    "infra",
+// --- Engineering / builder ---
+    "engineer",
+    "engineering",
+    "open source",
+    "hackathon",
 ];
-
 const TOP_N = 50;
 
 // ---------------------------------------------------------------------------
@@ -280,7 +340,7 @@ async function pool<T>(
 		.sort((a, b) => (b.priorityScore ?? 0) - (a.priorityScore ?? 0))
 		.slice(0, TOP_N);
 
-	let md = `# NYC Tech Week 2026 — Top ${ranked.length} Events by Priority\n\n`;
+	let md = `# ${CITY_LABEL} Tech Week 2026 — Top ${ranked.length} Events by Priority\n\n`;
 	md += `Generated ${new Date().toISOString()}\n`;
 	md += `Keywords: ${PRIORITY_KEYWORDS.join(", ")}\n\n`;
 	md += `| Score | Date | Time | Name | Location | Matched | Link |\n`;
