@@ -1,0 +1,1975 @@
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+
+<style>
+/* Fallback design tokens for standalone viewing — Claude.ai artifact env overrides these via its own :root */
+@layer screener-fallback {
+  :root {
+    --color-text-primary: #18181B;
+    --color-text-secondary: #52525B;
+    --color-text-tertiary: #71717A;
+    --color-text-success: #15803D;
+    --color-text-warning: #B45309;
+    --color-text-danger: #B91C1C;
+    --color-text-info: #1D4ED8;
+    --color-background-primary: #FFFFFF;
+    --color-background-secondary: #F8F7F4;
+    --color-border-tertiary: #E4E4E7;
+    --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --border-radius-sm: 4px;
+    --border-radius-md: 6px;
+    --border-radius-lg: 10px;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    color: var(--color-text-primary);
+    background: var(--color-background-secondary);
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 1rem;
+    line-height: 1.5;
+  }
+
+  button, select, input {
+    font-family: inherit;
+    font-size: 13px;
+  }
+  button {
+    background: var(--color-background-primary);
+    border: 0.5px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md);
+    padding: 6px 12px;
+    cursor: pointer;
+    color: var(--color-text-primary);
+  }
+  button:hover { background: var(--color-background-secondary); }
+  input[type="text"], select {
+    background: var(--color-background-primary);
+    border: 0.5px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md);
+    padding: 6px 10px;
+    color: var(--color-text-primary);
+  }
+  input[type="text"]:focus, select:focus, button:focus-visible {
+    outline: 2px solid var(--color-text-info);
+    outline-offset: 1px;
+  }
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0);
+  white-space: nowrap; border: 0;
+}
+</style>
+
+<div style="padding: 1rem 0;">
+<h2 class="sr-only">Name clearance screener: paste candidate names, get domain, trademark, company, package, and cultural signals with scoring and exports.</h2>
+
+<div style="display: flex; gap: 8px; margin-bottom: 8px;">
+  <input id="name-input" type="text" placeholder="Type a name + Enter, or paste comma-separated (press / to focus)" style="flex: 1;" aria-label="Add candidate name" />
+  <button id="add-btn" type="button">Add</button>
+  <button id="seed-btn" type="button" title="Add starter candidates">Seed</button>
+  <button id="check-all-btn" type="button" title="Run checks on all unchecked candidates"><i class="ti ti-player-play" aria-hidden="true"></i> Check all</button>
+  <button id="recheck-stale-btn" type="button" title="Recheck candidates older than 7 days"><i class="ti ti-refresh-dot" aria-hidden="true"></i> Stale</button>
+  <button id="clear-btn" type="button" title="Clear all"><i class="ti ti-trash" aria-hidden="true"></i></button>
+</div>
+
+<div class="toolbar" role="region" aria-label="Filters and sort">
+  <span id="status-text" aria-live="polite">Empty. Add names to begin.</span>
+
+  <label class="ctl"><span class="ctl-label">Sort</span>
+    <select id="sort-select" aria-label="Sort by">
+      <option value="score">Score (high → low)</option>
+      <option value="score-asc">Score (low → high)</option>
+      <option value="name">Name (A → Z)</option>
+      <option value="added">Recently added</option>
+      <option value="checked">Recently checked</option>
+    </select>
+  </label>
+
+  <label class="ctl"><span class="ctl-label">Show</span>
+    <select id="filter-select" aria-label="Filter">
+      <option value="all">All</option>
+      <option value="shortlist">Shortlisted</option>
+      <option value="com-free">.com available</option>
+      <option value="com-taken">.com taken</option>
+      <option value="unchecked">Unchecked</option>
+      <option value="stale">Stale (&gt;7d)</option>
+      <option value="errors">Has errors</option>
+      <option value="warned">Pre-flight warnings</option>
+      <option value="noted">Has notes</option>
+    </select>
+  </label>
+
+  <label class="ctl"><span class="ctl-label">Search</span>
+    <input id="search-input" type="search" placeholder="filter…" style="font-size: 12px; padding: 3px 8px; width: 120px;" aria-label="Filter candidates by name substring" />
+  </label>
+
+  <div class="ctl-spacer"></div>
+
+  <div class="export-group">
+    <button id="export-tsv" type="button" class="btn-sm" title="Copy as TSV"><i class="ti ti-table" aria-hidden="true"></i> TSV</button>
+    <button id="export-json" type="button" class="btn-sm" title="Copy as JSON"><i class="ti ti-braces" aria-hidden="true"></i> JSON</button>
+    <button id="export-md" type="button" class="btn-sm" title="Copy as Markdown"><i class="ti ti-markdown" aria-hidden="true"></i> MD</button>
+  </div>
+
+  <div class="export-group">
+    <button id="backup-btn" type="button" class="btn-sm" title="Download full state (notes, shortlist, all checks) as a JSON file"><i class="ti ti-device-floppy" aria-hidden="true"></i> Backup</button>
+    <button id="restore-btn" type="button" class="btn-sm" title="Restore from a backup JSON file"><i class="ti ti-upload" aria-hidden="true"></i> Restore</button>
+    <button id="share-btn" type="button" class="btn-sm" title="Copy a share link that imports these candidates into a teammate's screener"><i class="ti ti-share" aria-hidden="true"></i> Share</button>
+    <input type="file" id="restore-input" accept="application/json,.json" style="display:none" />
+  </div>
+</div>
+
+<div id="compare-bar" class="compare-bar" hidden>
+  <span><i class="ti ti-columns" aria-hidden="true"></i> <strong id="compare-count">0</strong> in compare set</span>
+  <button id="enter-compare-btn" type="button">View side-by-side <i class="ti ti-arrow-right" aria-hidden="true"></i></button>
+  <button id="clear-compare-btn" type="button" class="btn-sm" title="Remove all from compare set"><i class="ti ti-x" aria-hidden="true"></i> Clear</button>
+</div>
+
+<div id="progress-bar" class="progress" hidden><div class="progress-fill"></div></div>
+<div id="rate-banner" class="rate-banner" role="status" aria-live="polite" hidden>
+  <i class="ti ti-clock-pause" aria-hidden="true"></i>
+  <span>GitHub API rate-limited — resets in <span id="rate-banner-time">…</span>. New checks queue; existing data unaffected.</span>
+</div>
+
+<div id="results" role="list"></div>
+
+<div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+<div id="empty-state" class="empty">
+  <p style="margin: 0 0 8px;">No candidates yet.</p>
+  <p style="margin: 0; font-size: 13px;">Tap <code style="font-family: var(--font-mono); font-size: 12px;">Seed</code> for starter candidates, or press <kbd>/</kbd> to focus the input.</p>
+</div>
+
+<script>
+(function() {
+  const STORAGE_KEY = 'name-screener:candidates-v4';
+  const LEGACY_KEYS = ['name-screener:candidates-v3', 'name-screener:candidates-v2'];
+  const SEED = ['Tiresias', 'Funes', 'Wiglaf', 'Anarres', 'Mimir', 'Khonsu', 'Tawhiri', 'Lugh', 'Prospero', 'Calypso'];
+  const TLDS = ['.com', '.ai', '.io', '.app', '.dev', '.so', '.xyz', '.co'];
+  const WIKT_LANGS = ['en', 'fr', 'de', 'es'];
+  const CHECK_TTL_MS = 72 * 3600 * 1000;
+  const STALE_AFTER_MS = 7 * 24 * 3600 * 1000;
+  const API_STAGGER_MS = 400;
+
+  // Naming patterns commonly used when the base .com is taken
+  const VARIANT_PATTERNS = [
+    { transform: n => `get${n}`,   label: 'get+' },
+    { transform: n => `use${n}`,   label: 'use+' },
+    { transform: n => `try${n}`,   label: 'try+' },
+    { transform: n => `my${n}`,    label: 'my+' },
+    { transform: n => `${n}ly`,    label: '+ly' },
+    { transform: n => `${n}hq`,    label: '+hq' },
+    { transform: n => `${n}app`,   label: '+app' },
+    { transform: n => `${n}labs`,  label: '+labs' },
+    { transform: n => `${n}ify`,   label: '+ify' },
+    { transform: n => `${n}io`,    label: '+io' },
+  ];
+
+  // Major brand names — used for typosquat / near-collision detection via Levenshtein.
+  // Curated for visibility/recognition, not exhaustive. Lower-case, alphanumeric only.
+  const BRAND_LIST = [
+    'google','apple','amazon','microsoft','meta','facebook','twitter','tiktok','instagram',
+    'linkedin','youtube','netflix','spotify','uber','lyft','airbnb','stripe','shopify',
+    'square','paypal','venmo','github','gitlab','figma','notion','slack','zoom','discord',
+    'twitch','reddit','pinterest','snapchat','tesla','spacex','openai','anthropic','nvidia',
+    'intel','amd','samsung','sony','oracle','salesforce','adobe','autodesk','dropbox',
+    'asana','trello','monday','mongodb','postgres','mysql','redis','docker','kubernetes',
+    'terraform','vercel','netlify','cloudflare','datadog','sentry','segment','mixpanel',
+    'amplitude','nike','adidas','puma','reebok','starbucks','disney','pixar','marvel',
+    'lego','visa','mastercard','walmart','target','costco','ikea','rolex','gucci','prada',
+    'chanel','hermes','tiffany','cartier','bmw','audi','mercedes','toyota','honda','ford',
+    'porsche','ferrari','claude','gemini','perplexity','mistral','huggingface','replicate'
+  ];
+
+  // Common generic English nouns/adjectives that make weak brand names
+  const GENERIC_WORDS = new Set([
+    'data','app','tech','cloud','smart','quick','fast','easy','simple','best','top','pro',
+    'plus','prime','core','base','main','first','new','better','good','great','super','mega',
+    'hub','box','kit','lab','labs','works','shop','store','market','place','space','zone',
+    'world','time','life','love','make','build','create','design','craft','flow','sync','link'
+  ]);
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const resultsEl = $('results');
+  const emptyEl = $('empty-state');
+  const statusEl = $('status-text');
+  const input = $('name-input');
+  const progressEl = $('progress-bar');
+  const progressFill = progressEl.querySelector('.progress-fill');
+
+  let candidates = [];
+  let sortMode = 'score';
+  let filterMode = 'all';
+  let searchQuery = '';
+  let viewMode = 'list'; // 'list' | 'compare'
+  let pendingChecks = 0;
+  let completedChecks = 0;
+  let renderQueued = false;
+  let ghRateLimit = { remaining: null, resetAt: 0 };
+
+  // Fields that describe transient UI/in-flight state — never persisted to storage.
+  const EPHEMERAL_FIELDS = ['busy', 'variantsBusy', 'showBreakdown', 'showVariants', 'notesOpen', 'comparing'];
+
+  function isGhLimited() { return ghRateLimit.resetAt > Date.now(); }
+  function ghResetIn() {
+    const sec = Math.max(0, Math.ceil((ghRateLimit.resetAt - Date.now()) / 1000));
+    if (sec < 60) return `${sec}s`;
+    const m = Math.floor(sec / 60);
+    return `${m}m ${sec - m * 60}s`;
+  }
+
+  // GitHub fetch wrapper — honors rate-limit headers so we don't keep hammering an exhausted quota.
+  async function fetchGh(url) {
+    if (isGhLimited()) return { ok: false, rateLimited: true, resetAt: ghRateLimit.resetAt, json: () => Promise.resolve(null) };
+    const r = await fetch(url);
+    const reset = parseInt(r.headers.get('X-RateLimit-Reset') || '0', 10);
+    const remaining = parseInt(r.headers.get('X-RateLimit-Remaining') || '60', 10);
+    if (reset) ghRateLimit = { remaining, resetAt: reset * 1000 };
+    if (r.status === 403 && remaining === 0) {
+      return { ok: false, status: 403, rateLimited: true, resetAt: reset * 1000, json: () => Promise.resolve(null) };
+    }
+    return r;
+  }
+
+  // ---------- Persistence ----------
+
+  async function load() {
+    try {
+      const r = await window.storage.get(STORAGE_KEY);
+      if (r && r.value) candidates = JSON.parse(r.value);
+    } catch (e) { candidates = []; }
+    // Migration: try legacy keys in order if current is empty
+    if (candidates.length === 0) {
+      for (const k of LEGACY_KEYS) {
+        try {
+          const r2 = await window.storage.get(k);
+          if (r2 && r2.value) {
+            candidates = JSON.parse(r2.value);
+            await save();
+            break;
+          }
+        } catch (e) {}
+      }
+    }
+    // Strip any ephemeral flags that snuck into legacy storage so the UI starts clean.
+    for (const c of candidates) for (const f of EPHEMERAL_FIELDS) delete c[f];
+    render();
+  }
+  async function save() {
+    try {
+      const cleaned = candidates.map(c => {
+        const out = { ...c };
+        for (const f of EPHEMERAL_FIELDS) delete out[f];
+        return out;
+      });
+      await window.storage.set(STORAGE_KEY, JSON.stringify(cleaned));
+    } catch (e) {}
+  }
+
+  // ---- Toast notifications ----
+
+  let toastIdSeq = 0;
+  function toast(msg, opts = {}) {
+    const container = $('toast-container');
+    if (!container) return;
+    const id = ++toastIdSeq;
+    const t = opts.type || 'info';
+    const el = document.createElement('div');
+    el.className = `toast toast-${t}`;
+    el.dataset.id = String(id);
+    el.innerHTML = `
+      <span class="toast-msg">${esc(msg)}</span>
+      ${opts.action ? `<button class="toast-action" data-toast-id="${id}">${esc(opts.action.label)}</button>` : ''}
+      <button class="toast-close" data-toast-id="${id}" aria-label="Dismiss">&times;</button>
+    `;
+    container.appendChild(el);
+    const dismiss = () => {
+      el.classList.add('toast-out');
+      setTimeout(() => el.remove(), 200);
+    };
+    const timer = setTimeout(dismiss, opts.duration ?? (opts.action ? 7000 : 4000));
+    el.addEventListener('click', e => {
+      if (e.target.matches('.toast-close')) { clearTimeout(timer); dismiss(); }
+      else if (e.target.matches('.toast-action') && opts.action?.onClick) {
+        clearTimeout(timer);
+        try { opts.action.onClick(); } finally { dismiss(); }
+      }
+    });
+  }
+
+  // ---- URL-safe base64 (handles unicode) ----
+
+  function b64UrlEncode(s) {
+    const bytes = new TextEncoder().encode(s);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function b64UrlDecode(s) {
+    s = s.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    const bin = atob(s);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  }
+
+  // ---- Backup / restore / share ----
+
+  function exportBackup() {
+    const cleaned = candidates.map(c => {
+      const out = { ...c };
+      for (const f of EPHEMERAL_FIELDS) delete out[f];
+      return out;
+    });
+    const data = { version: 4, exportedAt: new Date().toISOString(), candidates: cleaned };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `name-screener-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast(`Backed up ${candidates.length} candidate${candidates.length === 1 ? '' : 's'}`, { type: 'success' });
+  }
+
+  async function importBackupFile(file) {
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const incoming = Array.isArray(data) ? data : data.candidates;
+      if (!Array.isArray(incoming)) throw new Error('Missing "candidates" array');
+
+      const replace = candidates.length > 0
+        ? confirm(`Backup contains ${incoming.length} candidates. OK = REPLACE current ${candidates.length}. Cancel = MERGE (skips duplicates).`)
+        : true;
+
+      if (replace) {
+        candidates = incoming;
+        for (const c of candidates) for (const f of EPHEMERAL_FIELDS) delete c[f];
+        save(); render();
+        toast(`Restored ${incoming.length} candidate${incoming.length === 1 ? '' : 's'}`, { type: 'success' });
+      } else {
+        let added = 0;
+        for (const c of incoming) {
+          if (!candidates.find(x => x.name.toLowerCase() === c.name.toLowerCase())) {
+            for (const f of EPHEMERAL_FIELDS) delete c[f];
+            candidates.push(c);
+            added++;
+          }
+        }
+        save(); render();
+        toast(`Merged ${added} new candidate${added === 1 ? '' : 's'} (${incoming.length - added} duplicate${incoming.length - added === 1 ? '' : 's'} skipped)`, { type: 'success' });
+      }
+    } catch (e) {
+      toast(`Import failed: ${e.message}`, { type: 'error', duration: 6000 });
+    }
+  }
+
+  function copyShareLink() {
+    // Prefer shortlist; if empty, share the whole set.
+    const sl = candidates.filter(c => c.shortlisted);
+    const source = sl.length ? sl : candidates;
+    if (!source.length) { toast('No candidates to share', { type: 'warning' }); return; }
+    // Share only what's needed to recreate the candidate set on the other end: name + optional notes.
+    // Keeps the URL short and avoids leaking full check artifacts.
+    const payload = b64UrlEncode(JSON.stringify({
+      v: 1,
+      n: source.map(c => c.notes ? [c.name, c.notes] : c.name)
+    }));
+    const url = `${location.origin}${location.pathname}${location.search}#share=${payload}`;
+    navigator.clipboard.writeText(url).then(() => {
+      toast(`Share link copied — ${source.length} candidate${source.length === 1 ? '' : 's'}${sl.length ? ' (shortlist)' : ''}`, { type: 'success' });
+    }, () => toast('Clipboard write failed', { type: 'error' }));
+  }
+
+  function importFromHash() {
+    if (!location.hash.startsWith('#share=')) return;
+    try {
+      const data = JSON.parse(b64UrlDecode(location.hash.slice('#share='.length)));
+      if (!Array.isArray(data.n)) throw new Error('Bad payload');
+      const entries = data.n.map(e => Array.isArray(e) ? { name: e[0], notes: e[1] } : { name: e });
+      const fresh = entries.filter(e => !candidates.find(c => c.name.toLowerCase() === e.name.toLowerCase()));
+      // Clear the hash so a reload doesn't re-prompt.
+      history.replaceState(null, '', location.pathname + location.search);
+      if (fresh.length === 0) {
+        toast(`Share link: ${entries.length} candidates, all already in your list`, { type: 'info' });
+        return;
+      }
+      toast(`Share link: ${entries.length} candidate${entries.length === 1 ? '' : 's'} (${fresh.length} new)`, {
+        type: 'info',
+        duration: 12000,
+        action: {
+          label: `Add ${fresh.length}`,
+          onClick: () => {
+            for (const e of fresh) {
+              candidates.push({ name: e.name, addedAt: new Date().toISOString(), notes: e.notes || undefined });
+            }
+            save(); render();
+            // Stagger the actual API checks.
+            fresh.forEach((e, i) => setTimeout(() => runChecks(e.name), i * API_STAGGER_MS));
+            toast(`Added ${fresh.length} from share link`, { type: 'success' });
+          }
+        }
+      });
+    } catch (e) {
+      toast('Invalid share link', { type: 'error' });
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  }
+
+  let speechWarned = false;
+
+  function speakName(name, btnEl) {
+    // Prefer a real human recording from dictionaryapi.dev when we have one — much better
+    // than TTS, and works on Linux installs without speech-dispatcher/espeak.
+    const c = candidates.find(c => c.name === name);
+    const audioUrl = c?.checks?.dictionary?.audio;
+    if (audioUrl) {
+      btnEl?.classList.add('playing');
+      const audio = new Audio(audioUrl);
+      let resolved = false;
+      audio.onended = () => { resolved = true; btnEl?.classList.remove('playing'); };
+      audio.onerror = () => {
+        if (resolved) return;
+        resolved = true;
+        btnEl?.classList.remove('playing');
+        speakViaTts(name, btnEl); // fall through to TTS
+      };
+      audio.play().catch(() => {
+        if (resolved) return;
+        resolved = true;
+        btnEl?.classList.remove('playing');
+        speakViaTts(name, btnEl);
+      });
+      return;
+    }
+    speakViaTts(name, btnEl);
+  }
+
+  function speakViaTts(name, btnEl) {
+    if (!window.speechSynthesis) {
+      alert('Speech synthesis not supported in this browser.');
+      return;
+    }
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(name);
+    u.rate = 0.95;
+    u.pitch = 1.0;
+
+    // Some browsers populate voices asynchronously; pick an English one when possible.
+    const voices = synth.getVoices();
+    const enVoice = voices.find(v => v.lang?.toLowerCase().startsWith('en')) || voices[0];
+    if (enVoice) u.voice = enVoice;
+
+    let started = false;
+    u.onstart = () => { started = true; btnEl?.classList.add('playing'); };
+    u.onend = () => btnEl?.classList.remove('playing');
+    u.onerror = (e) => {
+      btnEl?.classList.remove('playing');
+      console.warn('[screener] speech error', e);
+    };
+
+    synth.speak(u);
+
+    // Diagnostic — if nothing started speaking within ~400ms, surface a one-time hint.
+    setTimeout(() => {
+      if (started || synth.speaking || synth.pending) return;
+      btnEl?.classList.remove('playing');
+      if (!speechWarned) {
+        speechWarned = true;
+        const detail = synth.getVoices().length === 0
+          ? 'No TTS voices are available. On Linux, install `espeak-ng` or `speech-dispatcher`; on Chromium on Linux, voices come from the system. On macOS/Windows voices ship by default.'
+          : 'speak() returned without actually playing — the browser may have blocked autoplay or the chosen voice is unavailable.';
+        console.warn('[screener]', detail);
+        alert('Pronunciation playback failed.\n\n' + detail);
+      }
+    }, 400);
+  }
+
+  // ---------- Check primitives ----------
+
+  async function checkDomain(domain) {
+    try {
+      const r = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=NS`, {
+        headers: { 'Accept': 'application/dns-json' }
+      });
+      if (!r.ok) throw new Error('dns');
+      const data = await r.json();
+      if (data.Status === 3) return { status: 'available' };
+      if (data.Status === 0) {
+        const hasRecords = (data.Answer && data.Answer.length > 0) || (data.Authority && data.Authority.length > 0);
+        return { status: hasRecords ? 'taken' : 'unclear' };
+      }
+      return { status: 'unclear' };
+    } catch (e) { return { status: 'error', error: e.message }; }
+  }
+
+  async function checkWikipedia(name) {
+    try {
+      // Run both in parallel: exact-title summary AND full-text search.
+      // The summary endpoint misses names that appear only as mentions in other articles.
+      const [summary, search] = await Promise.all([
+        fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(name)}`)
+          .then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent('"' + name + '"')}&srlimit=5&srprop=snippet&format=json&origin=*`)
+          .then(r => r.ok ? r.json() : null).catch(() => null)
+      ]);
+
+      const hits = search?.query?.search || [];
+      const totalHits = search?.query?.searchinfo?.totalhits ?? hits.length;
+
+      // Exact-title hit beats mention.
+      if (summary && (summary.type || summary.extract)) {
+        return {
+          found: true,
+          type: summary.type,
+          extract: summary.extract ? summary.extract.slice(0, 200) : null,
+          url: summary.content_urls?.desktop?.page,
+          mentions: totalHits
+        };
+      }
+
+      // No dedicated page, but the term is mentioned in other articles.
+      if (hits.length > 0) {
+        const top = hits[0];
+        const snippet = (top.snippet || '').replace(/<[^>]+>/g, '').replace(/&[^;]+;/g, ' ').trim();
+        return {
+          found: true,
+          type: 'mention',
+          extract: snippet.slice(0, 200),
+          url: `https://en.wikipedia.org/wiki/${encodeURIComponent(top.title.replace(/ /g, '_'))}`,
+          mentions: totalHits,
+          topTitle: top.title
+        };
+      }
+
+      return { found: false };
+    } catch (e) { return { found: false, error: e.message }; }
+  }
+
+  async function checkSingleWiktionary(name, langEdition) {
+    try {
+      const r = await fetch(`https://${langEdition}.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(name.toLowerCase())}`);
+      if (!r.ok) return { edition: langEdition, found: false };
+      const data = await r.json();
+      const meanings = [];
+      for (const key of Object.keys(data || {})) {
+        for (const entry of data[key]) {
+          if (entry.definitions && entry.definitions[0]) {
+            const def = entry.definitions[0].definition.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+            meanings.push({ lang: entry.language || key, pos: entry.partOfSpeech, def: def.slice(0, 120) });
+          }
+        }
+      }
+      return { edition: langEdition, found: meanings.length > 0, meanings: meanings.slice(0, 2) };
+    } catch (e) { return { edition: langEdition, found: false }; }
+  }
+
+  // Check multiple Wiktionary editions in parallel — catches non-English meanings
+  // that aren't documented in en.wiktionary (e.g., a word that means something in German only).
+  async function checkWiktionaries(name) {
+    const results = await Promise.all(WIKT_LANGS.map(l => checkSingleWiktionary(name, l)));
+    const byLang = {};
+    for (const r of results) if (r?.found) byLang[r.edition] = r;
+    // Flat meanings list (preserved for backward compat with old data shape and exports)
+    const meanings = Object.values(byLang).flatMap(r => r.meanings || []);
+    return { byLang, meanings, found: Object.keys(byLang).length > 0 };
+  }
+
+  // Apple App Store / Mac App Store — free, CORS-friendly, no auth.
+  async function checkITunes(name) {
+    try {
+      const r = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(name)}&entity=software&limit=8`);
+      if (!r.ok) return { ok: false };
+      const data = await r.json();
+      const items = (data.results || []).map(it => ({
+        name: it.trackName,
+        seller: it.sellerName || it.artistName,
+        url: it.trackViewUrl,
+        kind: it.kind,
+        genre: it.primaryGenreName
+      }));
+      const exact = items.filter(it => it.name?.toLowerCase() === name.toLowerCase());
+      return {
+        ok: true,
+        total: data.resultCount || 0,
+        exactMatches: exact.length,
+        top: items.slice(0, 3)
+      };
+    } catch (e) { return { ok: false }; }
+  }
+
+  // Free dictionary API — provides IPA, audio URL, and English definition.
+  // Audio URL lets us play a real human recording on the speak button (much better than TTS on Linux).
+  async function checkDictionary(name) {
+    try {
+      const r = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(name.toLowerCase())}`);
+      if (r.status === 404) return { found: false };
+      if (!r.ok) return { ok: false };
+      const data = await r.json();
+      if (!Array.isArray(data) || data.length === 0) return { found: false };
+      const entry = data[0];
+      // Phonetic text may be on entry root or in any of the phonetics[] items.
+      const phonetic = entry.phonetic
+        || entry.phonetics?.find(p => p.text)?.text
+        || null;
+      // Audio URL — pick the first non-empty.
+      const audio = entry.phonetics?.find(p => p.audio)?.audio || null;
+      const meaning = entry.meanings?.[0];
+      const def = meaning?.definitions?.[0]?.definition?.slice(0, 120) || null;
+      const pos = meaning?.partOfSpeech || null;
+      return { found: true, phonetic, audio, def, pos };
+    } catch (e) { return { ok: false }; }
+  }
+
+  // HackerNews via Algolia — quoted phrase so partial matches don't pollute.
+  async function checkHackerNews(name) {
+    try {
+      const q = encodeURIComponent(`"${name}"`);
+      const r = await fetch(`https://hn.algolia.com/api/v1/search?query=${q}&tags=story&hitsPerPage=5`);
+      if (!r.ok) return { ok: false };
+      const data = await r.json();
+      const top = (data.hits || []).slice(0, 3).map(h => ({
+        title: h.title || h.story_title || '',
+        url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
+        points: h.points,
+        comments: h.num_comments
+      }));
+      return { ok: true, total: data.nbHits || 0, top };
+    } catch (e) { return { ok: false }; }
+  }
+
+  function companiesHouseLink(name) {
+    return `https://find-and-update.company-information.service.gov.uk/search?q=${encodeURIComponent(name)}`;
+  }
+
+  async function checkGitHub(name) {
+    try {
+      const r = await fetchGh(`https://api.github.com/search/repositories?q=${encodeURIComponent(name)}+in:name&per_page=5`);
+      if (r.rateLimited) return { ok: false, rateLimited: true, resetAt: r.resetAt };
+      if (!r.ok) return { ok: false };
+      const data = await r.json();
+      return {
+        ok: true,
+        total: data.total_count,
+        top: (data.items || []).slice(0, 3).map(it => ({
+          full: it.full_name, stars: it.stargazers_count, url: it.html_url, desc: it.description
+        }))
+      };
+    } catch (e) { return { ok: false }; }
+  }
+
+  async function checkGitHubUser(name) {
+    try {
+      const lower = name.toLowerCase().replace(/[^a-z0-9-]/g, '');
+      if (!lower) return { ok: false };
+      const r = await fetchGh(`https://api.github.com/users/${encodeURIComponent(lower)}`);
+      if (r.rateLimited) return { ok: false, rateLimited: true, handle: lower, resetAt: r.resetAt };
+      if (r.status === 404) return { exists: false, handle: lower };
+      if (!r.ok) return { ok: false };
+      const data = await r.json();
+      return { exists: true, handle: lower, url: data.html_url, type: data.type, followers: data.followers };
+    } catch (e) { return { ok: false }; }
+  }
+
+  async function checkNpm(name) {
+    try {
+      const lower = name.toLowerCase();
+      const r = await fetch(`https://registry.npmjs.org/${encodeURIComponent(lower)}`);
+      if (r.status === 404) return { exists: false };
+      if (!r.ok) return { ok: false };
+      const data = await r.json();
+      return {
+        exists: true,
+        url: `https://www.npmjs.com/package/${lower}`,
+        description: data.description ? data.description.slice(0, 120) : null
+      };
+    } catch (e) { return { ok: false }; }
+  }
+
+  async function checkCratesIo(name) {
+    try {
+      const lower = name.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      if (!lower) return { ok: false };
+      const r = await fetch(`https://crates.io/api/v1/crates/${encodeURIComponent(lower)}`);
+      if (r.status === 404) return { exists: false };
+      if (!r.ok) return { ok: false };
+      const data = await r.json();
+      return {
+        exists: true,
+        url: `https://crates.io/crates/${lower}`,
+        description: data.crate?.description ? data.crate.description.slice(0, 120) : null
+      };
+    } catch (e) { return { ok: false }; }
+  }
+
+  async function checkRubyGems(name) {
+    try {
+      const lower = name.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      if (!lower) return { ok: false };
+      const r = await fetch(`https://rubygems.org/api/v1/gems/${encodeURIComponent(lower)}.json`);
+      if (r.status === 404) return { exists: false };
+      if (!r.ok) return { ok: false };
+      const data = await r.json();
+      return {
+        exists: true,
+        url: `https://rubygems.org/gems/${lower}`,
+        description: data.info ? data.info.slice(0, 120) : null
+      };
+    } catch (e) { return { ok: false }; }
+  }
+
+  // Levenshtein edit distance — used by brand-similarity check.
+  function levenshtein(a, b) {
+    if (a === b) return 0;
+    const m = a.length, n = b.length;
+    if (!m) return n;
+    if (!n) return m;
+    let prev = new Array(n + 1);
+    for (let j = 0; j <= n; j++) prev[j] = j;
+    for (let i = 1; i <= m; i++) {
+      const curr = [i];
+      for (let j = 1; j <= n; j++) {
+        curr[j] = a[i - 1] === b[j - 1]
+          ? prev[j - 1]
+          : 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
+      }
+      prev = curr;
+    }
+    return prev[n];
+  }
+
+  // Flag near-collisions with well-known brands (likely typosquats, confusables).
+  function checkBrandSimilarity(name) {
+    const lower = name.toLowerCase().replace(/[^a-z]/g, '');
+    if (lower.length < 3) return [];
+    const hits = [];
+    for (const brand of BRAND_LIST) {
+      if (brand === lower) { hits.push({ brand, distance: 0, exact: true }); continue; }
+      const d = levenshtein(lower, brand);
+      // Require both strings be at least 4 chars to avoid trivial small-name matches
+      if (d <= 2 && Math.min(lower.length, brand.length) >= 4) {
+        hits.push({ brand, distance: d, exact: false });
+      }
+    }
+    return hits.sort((a, b) => a.distance - b.distance).slice(0, 3);
+  }
+
+  // Linguistic / pre-flight analysis — runs locally, no API.
+  function analyzeName(name) {
+    const trimmed = name.trim();
+    const lower = trimmed.toLowerCase();
+    const len = trimmed.length;
+    const warnings = [];
+    const breakdown = [];
+
+    // Length signal
+    if (len < 4) { breakdown.push({ delta: -4, label: 'Very short (<4)' }); warnings.push('Very short'); }
+    else if (len > 14) { breakdown.push({ delta: -4, label: 'Long name (>14)' }); warnings.push('Long name'); }
+    else if (len >= 5 && len <= 9) breakdown.push({ delta: 3, label: 'Ideal length' });
+
+    // Pronounceability — penalize triple-same letters and 4+ consecutive consonants.
+    // 'y' is excluded from the consonant class: when surrounded by consonants it acts as a vowel
+    // (syst-em, tryst, byte). Keeping it consonant flagged false positives like "resq systems" → "syst".
+    if (/(.)\1\1/.test(lower)) { breakdown.push({ delta: -3, label: 'Triple-letter repeat' }); warnings.push('Triple letter'); }
+    const consonantRuns = lower.match(/[bcdfghjklmnpqrstvwxz]{4,}/g);
+    if (consonantRuns) { breakdown.push({ delta: -3, label: 'Consonant cluster' }); warnings.push('Hard to pronounce'); }
+
+    // Vowel-consonant balance — punish all-consonant or all-vowel
+    const vowels = (lower.match(/[aeiouy]/g) || []).length;
+    const letters = (lower.match(/[a-z]/g) || []).length;
+    if (letters >= 4 && (vowels === 0 || vowels === letters)) {
+      breakdown.push({ delta: -4, label: 'Unbalanced vowels' });
+      warnings.push('Unbalanced vowels');
+    }
+
+    // Charset warnings — digits/specials reduce brandability
+    if (/\d/.test(trimmed)) warnings.push('Contains digits');
+    if (/[^a-zA-Z0-9\s'-]/.test(trimmed)) warnings.push('Special characters');
+
+    // Generic English word — common-noun penalty
+    if (GENERIC_WORDS.has(lower)) { breakdown.push({ delta: -8, label: 'Generic English word' }); warnings.push('Generic word'); }
+
+    // Look-alike confusables (l/I/1, O/0) — minor risk for verbal share
+    if (/[lI1]{2}/.test(trimmed) || /[O0]{2}/.test(trimmed)) warnings.push('Confusable chars');
+
+    // Brand similarity — catch likely typosquats of well-known brands.
+    const brandHits = checkBrandSimilarity(name);
+    if (brandHits.length) {
+      const closest = brandHits[0];
+      if (closest.exact) {
+        breakdown.push({ delta: -25, label: `Matches "${closest.brand}"` });
+        warnings.push(`= "${closest.brand}"`);
+      } else if (closest.distance === 1) {
+        breakdown.push({ delta: -15, label: `1 edit from "${closest.brand}"` });
+        warnings.push(`Near "${closest.brand}"`);
+      } else if (closest.distance === 2) {
+        breakdown.push({ delta: -6, label: `2 edits from "${closest.brand}"` });
+      }
+    }
+
+    return { breakdown, warnings, length: len, brandSimilar: brandHits };
+  }
+
+  async function checkPyPI(name) {
+    try {
+      const lower = name.toLowerCase();
+      const r = await fetch(`https://pypi.org/pypi/${encodeURIComponent(lower)}/json`);
+      if (r.status === 404) return { exists: false };
+      if (!r.ok) return { ok: false };
+      const data = await r.json();
+      return {
+        exists: true,
+        url: `https://pypi.org/project/${lower}/`,
+        description: data.info?.summary ? data.info.summary.slice(0, 120) : null
+      };
+    } catch (e) { return { ok: false }; }
+  }
+
+  async function checkWayback(domain) {
+    try {
+      const r = await fetch(`https://archive.org/wayback/available?url=${encodeURIComponent(domain)}`);
+      if (!r.ok) return { ok: false };
+      const data = await r.json();
+      const snapshot = data?.archived_snapshots?.closest;
+      if (snapshot && snapshot.available) {
+        return { everUsed: true, lastSeen: snapshot.timestamp, url: snapshot.url };
+      }
+      return { everUsed: false };
+    } catch (e) { return { ok: false }; }
+  }
+
+  // Generate common naming variants and check .com availability for each.
+  // Useful when the base .com is taken — often 2-3 variants are still free.
+  async function checkVariants(name) {
+    const lower = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!lower) return [];
+    const variants = VARIANT_PATTERNS.map(p => {
+      const v = p.transform(lower);
+      return { label: p.label, name: v, domain: `${v}.com` };
+    });
+    const results = await Promise.all(variants.map(v => checkDomain(v.domain)));
+    return variants.map((v, i) => ({ ...v, ...results[i] }));
+  }
+
+  function ransomwareRisk(wiki) {
+    if (!wiki?.found) return false;
+    const t = (wiki.extract || '').toLowerCase();
+    return /ransomware|malware|trojan|threat actor|cybercrime|exploit kit|apt group|hacking group/.test(t);
+  }
+
+  // ---------- Scoring ----------
+
+  function scoreCandidate(c) {
+    if (!c.checks) return null;
+    let s = 50;
+    const notes = [];
+    const breakdown = [];
+    const adj = (delta, label) => { s += delta; breakdown.push({ delta, label }); if (delta < 0 || delta >= 15) notes.push(label); };
+
+    const d = c.checks.domains || {};
+    if (d['.com']?.status === 'available') adj(20, '.com free');
+    else if (d['.com']?.status === 'taken') adj(-15, '.com taken');
+    if (d['.ai']?.status === 'available') adj(5, '.ai free');
+    if (d['.io']?.status === 'available') adj(3, '.io free');
+    if (d['.dev']?.status === 'available') adj(2, '.dev free');
+    if (d['.app']?.status === 'available') adj(2, '.app free');
+
+    if (c.checks.wayback?.everUsed) adj(-8, '.com had prior site');
+
+    if (c.checks.github?.ok && c.checks.github.total > 100) adj(-10, `${c.checks.github.total} GitHub repos`);
+    else if (c.checks.github?.ok && c.checks.github.total > 0) adj(-4, `${c.checks.github.total} GitHub repos`);
+
+    if (c.checks.githubUser?.exists) adj(-3, 'GH handle taken');
+
+    if (c.checks.npm?.exists) adj(-8, 'npm pkg exists');
+    if (c.checks.pypi?.exists) adj(-8, 'PyPI pkg exists');
+    if (c.checks.crates?.exists) adj(-6, 'crates.io pkg exists');
+    if (c.checks.gems?.exists) adj(-6, 'RubyGems pkg exists');
+
+    // Linguistic adjustments
+    if (c.checks.linguistic?.breakdown) {
+      for (const b of c.checks.linguistic.breakdown) {
+        adj(b.delta, b.label);
+      }
+    }
+
+    if (c.checks.wikipedia?.found) {
+      const w = c.checks.wikipedia;
+      if (w.type === 'disambiguation') adj(-6, 'Wikipedia disambig');
+      else if (w.type === 'mention') {
+        const m = w.mentions || 1;
+        if (m >= 50) adj(-4, `Wikipedia mentions: ${m}+`);
+        else if (m >= 10) adj(-2, `Wikipedia mentions: ${m}`);
+        else adj(-1, `Wikipedia mention: ${m}`);
+      } else adj(-2, 'Has Wikipedia page');
+    } else adj(6, 'No Wikipedia entry');
+
+    if (c.checks.wiktionary?.found) {
+      // Prefer the new multi-edition shape; fall back to legacy flat meanings.
+      const editionCount = c.checks.wiktionary.byLang
+        ? Object.keys(c.checks.wiktionary.byLang).length
+        : new Set((c.checks.wiktionary.meanings || []).map(m => m.lang).filter(Boolean)).size;
+      if (editionCount >= 2) adj(-5, `Defined in ${editionCount} languages`);
+      else if (editionCount === 1) adj(-1, 'Defined in 1 language');
+    }
+
+    // App Store collisions — exact name match is a serious clearance risk.
+    if (c.checks.itunes?.ok) {
+      const ex = c.checks.itunes.exactMatches || 0;
+      if (ex >= 1) adj(-12, `${ex} App Store exact match${ex === 1 ? '' : 'es'}`);
+      else if (c.checks.itunes.total >= 5) adj(-3, `${c.checks.itunes.total} similar App Store apps`);
+    }
+
+    // HackerNews discussion volume — tech-community visibility / clutter.
+    if (c.checks.hn?.ok) {
+      const t = c.checks.hn.total;
+      if (t >= 50) adj(-4, `${t} HN stories`);
+      else if (t >= 10) adj(-2, `${t} HN stories`);
+      else if (t >= 1) adj(-1, `${t} HN stories`);
+    }
+
+    // Common English dictionary word — small additional penalty for genericness.
+    // Skip if Wiktionary already flagged multi-language baggage (avoid double-counting).
+    if (c.checks.dictionary?.found) {
+      const wktCount = c.checks.wiktionary?.byLang ? Object.keys(c.checks.wiktionary.byLang).length : 0;
+      if (wktCount < 2) adj(-3, 'Common English word');
+    }
+
+    if (c.checks.ransomware) adj(-50, 'Threat-actor name');
+
+    return { score: Math.max(0, Math.min(100, Math.round(s))), notes, breakdown };
+  }
+
+  // ---------- Rendering ----------
+
+  function tldBadge(r) {
+    if (!r) return `<span class="tld-pending">…</span>`;
+    if (r.status === 'available') return `<span class="tld tld-ok"><i class="ti ti-check" aria-hidden="true"></i> free</span>`;
+    if (r.status === 'taken') return `<span class="tld tld-bad"><i class="ti ti-x" aria-hidden="true"></i> taken</span>`;
+    if (r.status === 'error') return `<span class="tld tld-error" title="${(r.error||'').replace(/"/g,'&quot;')}">error</span>`;
+    return `<span class="tld tld-unclear">unclear</span>`;
+  }
+
+  function scoreColor(s) {
+    if (s == null) return 'var(--color-text-tertiary)';
+    if (s >= 65) return 'var(--color-text-success)';
+    if (s >= 40) return 'var(--color-text-warning)';
+    return 'var(--color-text-danger)';
+  }
+
+  function fmtCount(n) {
+    if (n == null) return '–';
+    if (n >= 1000) return (n/1000).toFixed(1) + 'k';
+    return String(n);
+  }
+
+  function fmtAge(iso) {
+    if (!iso) return '';
+    const ms = Date.now() - new Date(iso).getTime();
+    const h = Math.floor(ms / 3600000);
+    if (h < 1) return 'just now';
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    return `${d}d ago`;
+  }
+
+  function isStale(c) {
+    if (!c.checks?.checkedAt) return false;
+    return Date.now() - new Date(c.checks.checkedAt).getTime() > STALE_AFTER_MS;
+  }
+
+  function applyFilters(list) {
+    let out = list;
+    switch (filterMode) {
+      case 'shortlist': out = out.filter(c => c.shortlisted); break;
+      case 'com-free': out = out.filter(c => c.checks?.domains?.['.com']?.status === 'available'); break;
+      case 'com-taken': out = out.filter(c => c.checks?.domains?.['.com']?.status === 'taken'); break;
+      case 'unchecked': out = out.filter(c => !c.checks); break;
+      case 'stale': out = out.filter(isStale); break;
+      case 'errors': out = out.filter(c => {
+        const d = c.checks?.domains || {};
+        return Object.values(d).some(v => v?.status === 'error') || c.checks?.github?.ok === false;
+      }); break;
+      case 'warned': out = out.filter(c => (c.checks?.linguistic?.warnings || analyzeName(c.name).warnings).length > 0); break;
+      case 'noted': out = out.filter(c => c.notes && c.notes.trim().length > 0); break;
+    }
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      out = out.filter(c => c.name.toLowerCase().includes(q) || (c.notes || '').toLowerCase().includes(q));
+    }
+    return out;
+  }
+
+  function applySort(list) {
+    const arr = [...list];
+    switch (sortMode) {
+      case 'score-asc':
+        return arr.sort((a, b) => (scoreCandidate(a)?.score ?? 999) - (scoreCandidate(b)?.score ?? 999));
+      case 'name':
+        return arr.sort((a, b) => a.name.localeCompare(b.name));
+      case 'added':
+        return arr.sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''));
+      case 'checked':
+        return arr.sort((a, b) => (b.checks?.checkedAt || '').localeCompare(a.checks?.checkedAt || ''));
+      default:
+        return arr.sort((a, b) => (scoreCandidate(b)?.score ?? -1) - (scoreCandidate(a)?.score ?? -1));
+    }
+  }
+
+  function registrarLinks(domain) {
+    return `
+      <a href="https://www.namecheap.com/domains/registration/results/?domain=${encodeURIComponent(domain)}" target="_blank" rel="noopener" class="reg-link" title="Namecheap">NC</a>
+      <a href="https://porkbun.com/checkout/search?q=${encodeURIComponent(domain)}" target="_blank" rel="noopener" class="reg-link" title="Porkbun">PB</a>
+    `;
+  }
+
+  function render() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      // Don't clobber an actively-edited notes textarea — defer until blur
+      const focused = document.activeElement;
+      if (focused?.classList?.contains('notes-input')) {
+        focused.addEventListener('blur', () => render(), { once: true });
+        return;
+      }
+      doRender();
+    });
+  }
+
+  function doRender() {
+    // Banner state must update regardless of whether the list is empty.
+    const banner = $('rate-banner');
+    if (isGhLimited()) {
+      banner.hidden = false;
+      $('rate-banner-time').textContent = ghResetIn();
+    } else {
+      banner.hidden = true;
+    }
+
+    // Compare-bar visibility (always reflects current selection count).
+    const compareSet = candidates.filter(c => c.comparing);
+    const cmpBar = $('compare-bar');
+    if (compareSet.length > 0 && viewMode === 'list') {
+      cmpBar.hidden = false;
+      $('compare-count').textContent = compareSet.length;
+    } else {
+      cmpBar.hidden = true;
+    }
+
+    // Compare view replaces the list entirely.
+    if (viewMode === 'compare') {
+      if (compareSet.length === 0) { viewMode = 'list'; doRender(); return; }
+      emptyEl.style.display = 'none';
+      progressEl.hidden = true;
+      statusEl.textContent = `Comparing ${compareSet.length} candidate${compareSet.length === 1 ? '' : 's'}`;
+      resultsEl.innerHTML = renderCompareView(compareSet);
+      return;
+    }
+
+    if (candidates.length === 0) {
+      emptyEl.style.display = 'block';
+      resultsEl.innerHTML = '';
+      statusEl.textContent = 'Empty. Add names to begin.';
+      progressEl.hidden = true;
+      return;
+    }
+    emptyEl.style.display = 'none';
+
+    const filtered = applyFilters(candidates);
+    const list = applySort(filtered);
+
+    const checked = candidates.filter(c => c.checks).length;
+    const sl = candidates.filter(c => c.shortlisted).length;
+    const stale = candidates.filter(isStale).length;
+    statusEl.textContent = `${candidates.length} total · ${checked} checked · ${sl} starred${stale ? ` · ${stale} stale` : ''}${list.length !== candidates.length ? ` · showing ${list.length}` : ''}`;
+
+    if (pendingChecks > 0) {
+      progressEl.hidden = false;
+      const total = completedChecks + pendingChecks;
+      const pct = total > 0 ? Math.round((completedChecks / total) * 100) : 100;
+      progressFill.style.width = `${pct}%`;
+    } else {
+      progressEl.hidden = true;
+    }
+
+    resultsEl.innerHTML = list.map(c => renderCard(c)).join('');
+  }
+
+  // Tick the rate-limit countdown only while a limit is active.
+  // When the limit expires we render once to clear the banner, then go back to cheap polling.
+  let bannerWasVisible = false;
+  setInterval(() => {
+    const limited = isGhLimited();
+    if (limited) {
+      const el = $('rate-banner-time');
+      if (el) el.textContent = ghResetIn();
+      bannerWasVisible = true;
+    } else if (bannerWasVisible) {
+      bannerWasVisible = false;
+      render();
+    }
+  }, 1000);
+
+  // Prime speech voices — Chromium populates getVoices() asynchronously via 'voiceschanged'.
+  if (window.speechSynthesis) {
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.addEventListener?.('voiceschanged', () => {}, { once: true });
+  }
+
+  // ---- Compare view ----
+
+  function renderCompareView(set) {
+    // Per-row helpers: compute "winner" indices so the table can highlight the best cell.
+    const winnersHigh = (vals) => {
+      const filtered = vals.filter(v => v != null && v >= 0);
+      if (!filtered.length) return vals.map(() => false);
+      const max = Math.max(...filtered);
+      return vals.map(v => v === max && v != null && v >= 0);
+    };
+    const winnersLow = (vals) => {
+      const filtered = vals.filter(v => v != null);
+      if (!filtered.length) return vals.map(() => false);
+      const min = Math.min(...filtered);
+      return vals.map(v => v === min && v != null);
+    };
+    const winnersTrue = (bools) => bools.map(b => !!b);
+
+    const renderRow = (label, cells, winners, opts = {}) => {
+      const cellHtml = cells.map((html, i) =>
+        `<td class="${winners?.[i] ? 'cmp-winner' : ''}${opts.cellClass ? ' ' + opts.cellClass : ''}">${html}</td>`
+      ).join('');
+      return `<tr><th>${esc(label)}</th>${cellHtml}</tr>`;
+    };
+
+    // Score
+    const scores = set.map(c => scoreCandidate(c)?.score ?? null);
+    const scoreCells = scores.map(s => s == null
+      ? '<span class="cmp-na">–</span>'
+      : `<span style="color: ${scoreColor(s)}; font-weight: 600; font-size: 18px;">${s}</span>`);
+
+    // .com status
+    const comStatuses = set.map(c => c.checks?.domains?.['.com']?.status);
+    const comCells = set.map(c => tldBadge(c.checks?.domains?.['.com']));
+    const comWinners = winnersTrue(comStatuses.map(s => s === 'available'));
+
+    // TLDs free count
+    const tldCounts = set.map(c => {
+      const d = c.checks?.domains || {};
+      return TLDS.filter(t => d[t]?.status === 'available').length;
+    });
+    const tldCells = tldCounts.map((n, i) => set[i].checks ? `${n} / ${TLDS.length}` : '<span class="cmp-na">not checked</span>');
+
+    // Wikipedia
+    const wikiCells = set.map(c => {
+      const w = c.checks?.wikipedia;
+      if (!c.checks) return '<span class="cmp-na">–</span>';
+      if (!w?.found) return '<span class="sig-ok">none</span>';
+      if (w.type === 'disambiguation') return '<span class="sig-warn">disambig</span>';
+      if (w.type === 'mention') return `<span class="sig-warn">${w.mentions ?? '?'} mentions</span>`;
+      return '<span class="sig-warn">has page</span>';
+    });
+    const wikiBad = set.map(c => c.checks?.wikipedia?.found ? 1 : 0);
+    const wikiWinners = winnersLow(wikiBad);
+
+    // Wiktionary editions
+    const wiktCounts = set.map(c => c.checks?.wiktionary?.byLang ? Object.keys(c.checks.wiktionary.byLang).length : 0);
+    const wiktCells = set.map((c, i) => c.checks ? (wiktCounts[i] === 0 ? '<span class="sig-ok">none</span>' : `<span class="sig-warn">${wiktCounts[i]} lang${wiktCounts[i] === 1 ? '' : 's'}</span>`) : '<span class="cmp-na">–</span>');
+    const wiktWinners = winnersLow(wiktCounts);
+
+    // Dictionary
+    const dictCells = set.map(c => {
+      const d = c.checks?.dictionary;
+      if (!c.checks) return '<span class="cmp-na">–</span>';
+      if (!d?.found) return '<span class="sig-ok">not a word</span>';
+      return `<span class="sig-warn">${d.pos ? esc(d.pos) : 'word'}${d.phonetic ? ` <span class="ipa-inline">${esc(d.phonetic)}</span>` : ''}</span>`;
+    });
+
+    // GitHub repos
+    const ghCounts = set.map(c => c.checks?.github?.ok ? c.checks.github.total : null);
+    const ghCells = ghCounts.map((n, i) => {
+      if (set[i].checks?.github?.rateLimited) return '<span class="sig-warn">rate-limited</span>';
+      if (n == null) return '<span class="cmp-na">–</span>';
+      return `<strong>${fmtCount(n)}</strong> repos`;
+    });
+    const ghWinners = winnersLow(ghCounts);
+
+    // Package collisions (npm/PyPI/crates/gems compact)
+    const pkgCells = set.map(c => {
+      if (!c.checks) return '<span class="cmp-na">–</span>';
+      const tags = [];
+      for (const [k, label] of [['npm', 'npm'], ['pypi', 'PyPI'], ['crates', 'crates'], ['gems', 'gems']]) {
+        const v = c.checks?.[k];
+        if (v?.exists) tags.push(`<span class="cmp-pkg-bad">${label}</span>`);
+      }
+      return tags.length ? tags.join(' ') : '<span class="sig-ok">all free</span>';
+    });
+    const pkgCollisionCounts = set.map(c => {
+      if (!c.checks) return null;
+      return ['npm','pypi','crates','gems'].filter(k => c.checks?.[k]?.exists).length;
+    });
+    const pkgWinners = winnersLow(pkgCollisionCounts);
+
+    // App Store
+    const appExact = set.map(c => c.checks?.itunes?.ok ? (c.checks.itunes.exactMatches || 0) : null);
+    const appCells = set.map((c, i) => {
+      if (!c.checks?.itunes?.ok) return '<span class="cmp-na">–</span>';
+      const ex = appExact[i];
+      const total = c.checks.itunes.total;
+      if (ex > 0) return `<span class="sig-bad-link">${ex} exact</span>${total > ex ? ` · ${total - ex} similar` : ''}`;
+      if (total > 0) return `<span class="sig-warn">${total} similar</span>`;
+      return '<span class="sig-ok">free</span>';
+    });
+    const appWinners = winnersLow(appExact);
+
+    // HN stories
+    const hnTotals = set.map(c => c.checks?.hn?.ok ? c.checks.hn.total : null);
+    const hnCells = hnTotals.map((n, i) => {
+      if (n == null) return '<span class="cmp-na">–</span>';
+      if (n === 0) return '<span class="sig-ok">none</span>';
+      return n >= 10 ? `<span class="sig-warn">${n}</span>` : `<span>${n}</span>`;
+    });
+    const hnWinners = winnersLow(hnTotals);
+
+    // Brand similarity
+    const brandCells = set.map(c => {
+      const hits = c.checks?.linguistic?.brandSimilar || c.linguistic?.brandSimilar || analyzeName(c.name).brandSimilar;
+      if (!hits?.length) return '<span class="sig-ok">none</span>';
+      const h = hits[0];
+      return `<span class="sig-warn">~${esc(h.brand)} (${h.distance === 0 ? 'exact' : `${h.distance} edit${h.distance === 1 ? '' : 's'}`})</span>`;
+    });
+    const brandSeverity = set.map(c => {
+      const hits = c.checks?.linguistic?.brandSimilar || analyzeName(c.name).brandSimilar;
+      if (!hits?.length) return 0;
+      const d = hits[0].distance;
+      return d === 0 ? 3 : d === 1 ? 2 : 1;
+    });
+    const brandWinners = winnersLow(brandSeverity);
+
+    // Pre-flight warnings count
+    const warnCounts = set.map(c => (c.checks?.linguistic?.warnings || analyzeName(c.name).warnings).length);
+    const warnCells = warnCounts.map((n, i) =>
+      n === 0 ? '<span class="sig-ok">none</span>' : `<span class="sig-warn">${n}: ${esc((set[i].checks?.linguistic?.warnings || analyzeName(set[i].name).warnings).slice(0, 2).join(', '))}${n > 2 ? '…' : ''}</span>`
+    );
+    const warnWinners = winnersLow(warnCounts);
+
+    // Notes
+    const notesCells = set.map(c => c.notes
+      ? `<div class="cmp-notes">${esc(c.notes).replace(/\n/g, '<br>')}</div>`
+      : '<span class="cmp-na">—</span>');
+
+    // Header row — candidate names with score + shortlist/lineage hints
+    const headerCells = set.map(c => {
+      const ls = c.checks?.linguistic;
+      return `
+        <th class="cmp-name-head">
+          <div class="cmp-name">${esc(c.name)}${c.shortlisted ? ' <span class="star-on"><i class="ti ti-star" aria-hidden="true"></i></span>' : ''}</div>
+          ${ls?.brandSimilar?.length || c.addedFrom ? `<div class="cmp-subname">${c.addedFrom ? `from ${esc(c.addedFrom)}` : ''}</div>` : ''}
+          <button type="button" data-action="toggle-compare" data-name="${esc(c.name)}" class="cmp-remove" title="Remove from compare set"><i class="ti ti-x" aria-hidden="true"></i></button>
+        </th>
+      `;
+    }).join('');
+
+    const body = [
+      renderRow('Score',           scoreCells, winnersHigh(scores)),
+      renderRow('.com',            comCells,   comWinners),
+      renderRow('TLDs free',       tldCells,   winnersHigh(tldCounts)),
+      renderRow('Wikipedia',       wikiCells,  wikiWinners),
+      renderRow('Wiktionary',      wiktCells,  wiktWinners),
+      renderRow('Dictionary',      dictCells,  null),
+      renderRow('GitHub repos',    ghCells,    ghWinners),
+      renderRow('Packages',        pkgCells,   pkgWinners),
+      renderRow('App Store',       appCells,   appWinners),
+      renderRow('HN stories',      hnCells,    hnWinners),
+      renderRow('Brand collision', brandCells, brandWinners),
+      renderRow('Warnings',        warnCells,  warnWinners),
+      renderRow('Notes',           notesCells, null, { cellClass: 'cmp-notes-cell' }),
+    ].join('');
+
+    return `
+      <div class="compare-view">
+        <div class="compare-head">
+          <button type="button" data-action="exit-compare" class="link-btn"><i class="ti ti-arrow-left" aria-hidden="true"></i> Back to list</button>
+          <span class="compare-hint">Highlighted cells = best in row. Names without checks show <span class="cmp-na">–</span>.</span>
+        </div>
+        <div class="compare-grid">
+          <table class="compare-table">
+            <thead><tr><th class="cmp-row-label"></th>${headerCells}</tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderCard(c) {
+    const sc = scoreCandidate(c);
+    const score = sc?.score;
+    const notes = sc?.notes || [];
+    const lower = c.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const d = c.checks?.domains || {};
+    const tldRow = TLDS.map(t => {
+      const r = d[t];
+      const dom = `${lower}${t}`;
+      const buy = r?.status === 'available' ? `<span class="reg-buy">${registrarLinks(dom)}</span>` : '';
+      return `<div class="tld-row"><span class="tld-name">${dom}</span><span class="tld-right">${buy}${tldBadge(r)}</span></div>`;
+    }).join('');
+
+    const wiki = c.checks?.wikipedia;
+    const wikt = c.checks?.wiktionary;
+    const gh = c.checks?.github;
+    const ghu = c.checks?.githubUser;
+    const npm = c.checks?.npm;
+    const pypi = c.checks?.pypi;
+    const crates = c.checks?.crates;
+    const gems = c.checks?.gems;
+    const itunes = c.checks?.itunes;
+    const hn = c.checks?.hn;
+    const dict = c.checks?.dictionary;
+    const wb = c.checks?.wayback;
+    const ling = c.checks?.linguistic || analyzeName(c.name);
+    const stale = isStale(c);
+    const warningChips = (ling?.warnings || []).map(w => `<span class="warn-chip">${esc(w)}</span>`).join('');
+    const nameAttr = esc(c.name);
+    const lineageBadge = c.addedFrom ? `<span class="lineage" title="Variant of ${esc(c.addedFrom)}"><i class="ti ti-git-branch" aria-hidden="true"></i> from ${esc(c.addedFrom)}</span>` : '';
+
+    const linksRow = `
+      <a href="https://tmsearch.uspto.gov/search/search-information?searchText=${encodeURIComponent(c.name)}" class="link-out" target="_blank" rel="noopener">USPTO TM <i class="ti ti-external-link" aria-hidden="true"></i></a>
+      <a href="${companiesHouseLink(c.name)}" class="link-out" target="_blank" rel="noopener">Companies House <i class="ti ti-external-link" aria-hidden="true"></i></a>
+      <a href="https://branddb.wipo.int/en/quicksearch/brand/${encodeURIComponent(c.name)}" class="link-out" target="_blank" rel="noopener">WIPO Brand <i class="ti ti-external-link" aria-hidden="true"></i></a>
+      <a href="https://www.google.com/search?q=%22${encodeURIComponent(c.name)}%22+ransomware+OR+malware" class="link-out" target="_blank" rel="noopener">Threat-actor <i class="ti ti-external-link" aria-hidden="true"></i></a>
+    `;
+
+    const breakdownHtml = sc?.breakdown?.length
+      ? sc.breakdown.map(b => `<div class="bd-row ${b.delta >= 0 ? 'bd-pos' : 'bd-neg'}"><span>${b.label}</span><span class="bd-delta">${b.delta >= 0 ? '+' : ''}${b.delta}</span></div>`).join('')
+      : '';
+
+    return `
+      <div class="card" data-name="${nameAttr}" role="listitem">
+        <div class="card-head">
+          <div style="min-width: 0;">
+            <div class="name-row">
+              <span class="name">${esc(c.name)}</span>
+              <button class="play-btn" data-action="speak" data-name="${nameAttr}" title="Hear pronunciation${dict?.audio ? ' (recorded)' : ' (TTS)'}" aria-label="Play pronunciation of ${nameAttr}"><i class="ti ti-${dict?.audio ? 'speakerphone' : 'volume'}" aria-hidden="true"></i></button>
+              ${dict?.phonetic ? `<span class="ipa" title="IPA pronunciation">${esc(dict.phonetic)}</span>` : ''}
+              ${c.shortlisted ? '<span class="star-on" title="Shortlisted"><i class="ti ti-star" aria-hidden="true"></i></span>' : ''}
+              ${c.checks?.ransomware ? '<span class="warn-pill"><i class="ti ti-alert-triangle" aria-hidden="true"></i> threat-actor</span>' : ''}
+              ${stale ? `<span class="stale-pill" title="Last checked ${fmtAge(c.checks.checkedAt)}"><i class="ti ti-clock" aria-hidden="true"></i> stale</span>` : ''}
+              ${c.unCheckable ? '<span class="warn-pill" title="Name has no DNS-valid characters after normalization"><i class="ti ti-alert-triangle" aria-hidden="true"></i> un-checkable</span>' : ''}
+              ${lineageBadge}
+              ${warningChips}
+            </div>
+            <div class="sub">${c.checks ? esc(notes.join(' · ') || 'Looks clean') : (c.busy ? 'Checking…' : 'Not checked yet')}${c.checks?.checkedAt ? ` <span class="age">· checked ${fmtAge(c.checks.checkedAt)}</span>` : ''}</div>
+          </div>
+          <div class="score-block">
+            <button class="score-btn" data-action="toggle-breakdown" data-name="${nameAttr}" title="Click for score breakdown" style="color: ${scoreColor(score)};">
+              ${score ?? '–'}
+            </button>
+            <div class="score-label">score</div>
+          </div>
+        </div>
+
+        ${c.showBreakdown && breakdownHtml ? `<div class="breakdown"><div class="bd-title">Score breakdown (base 50)</div>${breakdownHtml}</div>` : ''}
+
+        ${c.checks ? `
+          <div class="check-grid">
+            <div>
+              <div class="section-label">Domains (DNS)</div>
+              <div class="tld-list">${tldRow}</div>
+              ${wb?.everUsed ? `<div class="signal sig-warn" style="margin-top:8px;">Wayback: ${lower}.com had a site (last seen ${wb.lastSeen?.slice(0,4)})</div>` : ''}
+            </div>
+            <div>
+              <div class="section-label">Software collisions</div>
+              <div class="signal">
+                GitHub: ${gh?.ok
+                  ? `<strong>${fmtCount(gh.total)}</strong> repos`
+                  : gh?.rateLimited
+                    ? '<span class="sig-warn">rate-limited <button type="button" data-action="recheck" data-name="' + c.name + '" class="link-btn">retry after reset</button></span>'
+                    : '<span class="sig-warn">check failed</span>'}
+                ${gh?.ok && gh.top?.length ? `<div class="mini-list">${gh.top.map(t => `<a href="${esc(t.url)}" target="_blank" rel="noopener" class="mini-link">${esc(t.full)} · ★${fmtCount(t.stars)}</a>`).join('')}</div>` : ''}
+              </div>
+              <div class="signal" style="margin-top:6px;">
+                npm: ${npm == null ? '–' : npm.exists ? `<a href="${npm.url}" target="_blank" rel="noopener" class="sig-bad-link">exists</a>` : '<span class="sig-ok">free</span>'}
+                · PyPI: ${pypi == null ? '–' : pypi.exists ? `<a href="${pypi.url}" target="_blank" rel="noopener" class="sig-bad-link">exists</a>` : '<span class="sig-ok">free</span>'}
+              </div>
+              <div class="signal" style="margin-top:6px;">
+                crates: ${crates == null ? '–' : crates.exists ? `<a href="${crates.url}" target="_blank" rel="noopener" class="sig-bad-link">exists</a>` : '<span class="sig-ok">free</span>'}
+                · gems: ${gems == null ? '–' : gems.exists ? `<a href="${gems.url}" target="_blank" rel="noopener" class="sig-bad-link">exists</a>` : '<span class="sig-ok">free</span>'}
+              </div>
+              <div class="signal" style="margin-top:6px;">
+                GH handle: ${
+                  ghu?.exists ? `<a href="${esc(ghu.url)}" target="_blank" rel="noopener" class="sig-bad-link">@${esc(ghu.handle)} taken</a>`
+                  : ghu?.exists === false ? `<span class="sig-ok">@${esc(ghu.handle)} free</span>`
+                  : ghu?.rateLimited ? '<span class="sig-warn">rate-limited</span>'
+                  : '–'}
+              </div>
+              <div class="signal" style="margin-top:6px;">
+                App Store: ${
+                  !itunes?.ok ? '–'
+                  : itunes.exactMatches > 0
+                    ? `<a href="${esc(itunes.top.find(t => t.name?.toLowerCase() === c.name.toLowerCase())?.url || itunes.top[0].url)}" target="_blank" rel="noopener" class="sig-bad-link">${itunes.exactMatches} exact match${itunes.exactMatches === 1 ? '' : 'es'}</a>${itunes.total > itunes.exactMatches ? ` · <span class="sig-warn">${itunes.total - itunes.exactMatches} similar</span>` : ''}`
+                  : itunes.total > 0 ? `<span class="sig-warn">${itunes.total} similar</span>`
+                  : '<span class="sig-ok">free</span>'}
+                · HN: ${
+                  !hn?.ok ? '–'
+                  : hn.total >= 10 ? `<a href="https://hn.algolia.com/?q=${encodeURIComponent(c.name)}" target="_blank" rel="noopener" class="sig-warn">${hn.total} stories</a>`
+                  : hn.total > 0 ? `<a href="https://hn.algolia.com/?q=${encodeURIComponent(c.name)}" target="_blank" rel="noopener" class="sig-info">${hn.total} stories</a>`
+                  : '<span class="sig-ok">no mentions</span>'}
+              </div>
+              ${itunes?.ok && itunes.top?.length ? `<div class="mini-list">${itunes.top.slice(0, 2).map(t => `<a href="${esc(t.url)}" target="_blank" rel="noopener" class="mini-link">${esc(t.name)}${t.seller ? ` · <span style="opacity:0.7">${esc(t.seller)}</span>` : ''}</a>`).join('')}</div>` : ''}
+            </div>
+            <div style="grid-column: 1 / -1;">
+              <div class="section-label">Cultural signal</div>
+              <div class="signal">
+                ${wiki?.found
+                  ? (wiki.type === 'disambiguation'
+                      ? '<span class="sig-warn">Wikipedia disambiguation — many entities</span>'
+                      : wiki.type === 'mention'
+                        ? `<span class="sig-warn">Mentioned in ${wiki.mentions || '?'} Wikipedia article${wiki.mentions === 1 ? '' : 's'}${wiki.topTitle ? ` — top: <em>${esc(wiki.topTitle)}</em>` : ''}</span>${wiki.extract ? `<div class="signal sig-info" style="margin-top:4px; font-size:12px;">"${esc(wiki.extract)}…"</div>` : ''}`
+                        : `<span class="sig-info">${esc(wiki.extract || 'Wikipedia entry')}</span>`)
+                  : '<span class="sig-ok">No Wikipedia entry</span>'}
+                ${wiki?.url ? ` <a href="${esc(wiki.url)}" target="_blank" rel="noopener" class="link-out-inline">read ↗</a>` : ''}
+              </div>
+              ${dict?.found && dict.def ? `<div class="signal" style="margin-top:6px;"><span class="sig-info"><strong>Dictionary</strong>${dict.pos ? ` (${esc(dict.pos)})` : ''}: ${esc(dict.def)}</span></div>` : ''}
+              ${wikt?.found ? `<div class="signal" style="margin-top:6px;"><span class="sig-info">Wiktionary: ${
+                wikt.byLang
+                  ? Object.entries(wikt.byLang).map(([ed, data]) => {
+                      const m = data.meanings?.[0];
+                      return `<span class="wikt-lang"><strong>${esc(ed)}</strong>${m ? ` <em>${esc(m.lang)}</em> ${esc(m.def)}` : ''}</span>`;
+                    }).join(' · ')
+                  : wikt.meanings.map(m => `<em>${esc(m.lang)}</em> (${esc(m.pos)}) ${esc(m.def)}`).join(' · ')
+              }</span></div>` : ''}
+            </div>
+            <div style="grid-column: 1 / -1;">
+              <div class="section-label">Manual lookups</div>
+              <div class="link-row">${linksRow}</div>
+            </div>
+          </div>
+        ` : ''}
+
+        ${c.showVariants ? `
+          <div class="variants-block">
+            <div class="variants-head">
+              <div class="section-label" style="margin: 0;">Variant .com availability</div>
+              ${c.variants ? `<span class="variants-meta">${c.variants.filter(v => v.status === 'available').length}/${c.variants.length} free · ${fmtAge(c.variantsCheckedAt)}</span>` : ''}
+            </div>
+            ${c.variantsBusy && !c.variants ? '<div class="signal" style="margin-top:8px;">Checking variants…</div>' : ''}
+            ${c.variants ? `
+              <div class="variants-grid">
+                ${c.variants.map(v => `
+                  <div class="variant-row">
+                    <span class="variant-name">${esc(v.name)}.com<span class="variant-label">${esc(v.label)}</span></span>
+                    <span class="variant-right">
+                      ${v.status === 'available' ? `<span class="reg-buy">${registrarLinks(v.domain)}</span>` : ''}
+                      ${tldBadge(v)}
+                    </span>
+                  </div>
+                `).join('')}
+              </div>
+              <div class="variants-summary">
+                ${c.variants.filter(v => v.status === 'available').length > 0
+                  ? `<button type="button" data-action="adopt-variants" data-name="${nameAttr}" class="link-btn"><i class="ti ti-plus" aria-hidden="true"></i> Add ${c.variants.filter(v => v.status === 'available').length} available as candidates</button> · `
+                  : ''}
+                <button type="button" data-action="variants" data-name="${nameAttr}" class="link-btn">Hide</button>
+                · <button type="button" data-action="recheck-variants" data-name="${nameAttr}" class="link-btn">Recheck</button>
+              </div>
+            ` : ''}
+          </div>
+        ` : ''}
+
+        <details class="notes-block"${(c.notesOpen ?? !!c.notes) ? ' open' : ''}>
+          <summary><i class="ti ti-note" aria-hidden="true"></i> Notes${c.notes ? '' : ' (add)'}</summary>
+          <textarea class="notes-input" data-name="${nameAttr}" rows="2" placeholder="Why you like it, meeting context, variations to try…">${esc(c.notes || '')}</textarea>
+        </details>
+
+        <div class="card-actions">
+          ${!c.checks ? `<button type="button" data-action="check" data-name="${nameAttr}">${c.busy ? 'Checking…' : 'Run checks'}</button>` : `<button type="button" data-action="recheck" data-name="${nameAttr}"><i class="ti ti-refresh" aria-hidden="true"></i> Recheck</button>`}
+          <button type="button" data-action="shortlist" data-name="${nameAttr}">${c.shortlisted ? '★ Unstar' : '☆ Shortlist'}</button>
+          <button type="button" data-action="toggle-compare" data-name="${nameAttr}" class="${c.comparing ? 'btn-active' : ''}" title="Add to side-by-side comparison set"><i class="ti ti-columns" aria-hidden="true"></i> ${c.comparing ? 'In compare' : 'Compare'}</button>
+          <button type="button" data-action="variants" data-name="${nameAttr}" title="Try common naming variants like getName, Namely, Namehq"><i class="ti ti-arrows-shuffle" aria-hidden="true"></i> ${c.variants ? (c.showVariants ? 'Hide variants' : 'Show variants') : c.variantsBusy ? 'Finding…' : 'Variants'}</button>
+          <button type="button" data-action="ask" data-name="${nameAttr}">Ask Claude ↗</button>
+          <button type="button" data-action="remove" data-name="${nameAttr}" style="margin-left: auto;" title="Remove" aria-label="Remove ${nameAttr}"><i class="ti ti-x" aria-hidden="true"></i></button>
+        </div>
+      </div>
+    `;
+  }
+
+  // ---------- Actions ----------
+
+  async function runChecks(name, opts = {}) {
+    const c = candidates.find(c => c.name === name);
+    if (!c) return;
+    if (!opts.force && c.checks?.checkedAt && Date.now() - new Date(c.checks.checkedAt).getTime() < CHECK_TTL_MS) return;
+    const lower = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!lower) {
+      // Pure-symbol / unicode-only name — can't form a meaningful domain or registry slug.
+      // Flag it so the card renders a clear "un-checkable" state rather than fake-checking.
+      c.unCheckable = true;
+      save(); render();
+      return;
+    }
+    c.unCheckable = false;
+    c.busy = true;
+    pendingChecks++;
+    render();
+    try {
+      const [wiki, wikt, gh, ghu, npmRes, pypi, crates, gems, itunes, hn, dict, wb, ...domainResults] = await Promise.all([
+        checkWikipedia(name),
+        checkWiktionaries(name),
+        checkGitHub(name),
+        checkGitHubUser(name),
+        checkNpm(name),
+        checkPyPI(name),
+        checkCratesIo(name),
+        checkRubyGems(name),
+        checkITunes(name),
+        checkHackerNews(name),
+        checkDictionary(name),
+        checkWayback(`${lower}.com`),
+        ...TLDS.map(t => checkDomain(`${lower}${t}`))
+      ]);
+      const domains = {};
+      TLDS.forEach((t, i) => domains[t] = domainResults[i]);
+      c.checks = {
+        domains, wikipedia: wiki, wiktionary: wikt, github: gh, githubUser: ghu,
+        npm: npmRes, pypi, crates, gems, itunes, hn, dictionary: dict, wayback: wb,
+        ransomware: ransomwareRisk(wiki),
+        linguistic: analyzeName(name),
+        checkedAt: new Date().toISOString()
+      };
+    } finally {
+      c.busy = false;
+      pendingChecks--;
+      completedChecks++;
+      if (pendingChecks === 0) completedChecks = 0;
+      save(); render();
+    }
+  }
+
+  function addNames(raw) {
+    const parts = raw.split(/[,\n]/).map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+    const newOnes = [];
+    for (const p of parts) {
+      if (!candidates.find(c => c.name.toLowerCase() === p.toLowerCase())) {
+        candidates.push({ name: p, addedAt: new Date().toISOString() });
+        newOnes.push(p);
+      }
+    }
+    save(); render();
+    newOnes.forEach((n, i) => setTimeout(() => runChecks(n), i * API_STAGGER_MS));
+  }
+
+  async function runVariants(name) {
+    const c = candidates.find(c => c.name === name);
+    if (!c) return;
+    c.variantsBusy = true;
+    c.showVariants = true;
+    render();
+    try {
+      c.variants = await checkVariants(name);
+      c.variantsCheckedAt = new Date().toISOString();
+    } finally {
+      c.variantsBusy = false;
+      save(); render();
+    }
+  }
+
+  function adoptVariants(name) {
+    const c = candidates.find(c => c.name === name);
+    if (!c?.variants) return;
+    const avail = c.variants.filter(v => v.status === 'available');
+    const fresh = [];
+    for (const v of avail) {
+      if (!candidates.find(cd => cd.name.toLowerCase() === v.name.toLowerCase())) {
+        candidates.push({ name: v.name, addedAt: new Date().toISOString(), addedFrom: c.name });
+        fresh.push(v.name);
+      }
+    }
+    save(); render();
+    fresh.forEach((n, i) => setTimeout(() => runChecks(n), i * API_STAGGER_MS));
+  }
+
+  function checkAll(opts) {
+    const targets = opts?.stale
+      ? candidates.filter(isStale)
+      : candidates.filter(c => !c.checks);
+    targets.forEach((c, i) => setTimeout(() => runChecks(c.name, { force: !!opts?.stale }), i * API_STAGGER_MS));
+  }
+
+  // ---------- Exports ----------
+
+  // Replace tabs/newlines so a multi-line note doesn't shred the TSV grid.
+  const tsvCell = (s) => String(s ?? '').replace(/[\t\r\n]+/g, ' ').trim();
+
+  function exportTsv() {
+    const sl = candidates.filter(c => c.shortlisted);
+    const list = applySort(sl.length ? sl : candidates);
+    const lines = ['name\tscore\t' + TLDS.map(t => t.slice(1)).join('\t') + '\tsignals\tuser_notes'];
+    list.forEach(c => {
+      const sc = scoreCandidate(c);
+      const d = c.checks?.domains || {};
+      lines.push([
+        tsvCell(c.name),
+        sc?.score ?? '',
+        ...TLDS.map(t => d[t]?.status ?? ''),
+        tsvCell(sc?.notes?.join('; ') ?? ''),
+        tsvCell(c.notes || '')
+      ].join('\t'));
+    });
+    return lines.join('\n');
+  }
+
+  function exportJson() {
+    const sl = candidates.filter(c => c.shortlisted);
+    const list = applySort(sl.length ? sl : candidates);
+    return JSON.stringify(list.map(c => ({
+      name: c.name,
+      score: scoreCandidate(c)?.score ?? null,
+      shortlisted: !!c.shortlisted,
+      addedAt: c.addedAt,
+      checkedAt: c.checks?.checkedAt ?? null,
+      domains: c.checks?.domains ?? null,
+      collisions: {
+        github_repos: c.checks?.github?.total ?? null,
+        github_user_taken: c.checks?.githubUser?.exists ?? null,
+        npm: c.checks?.npm?.exists ?? null,
+        pypi: c.checks?.pypi?.exists ?? null,
+        crates: c.checks?.crates?.exists ?? null,
+        gems: c.checks?.gems?.exists ?? null,
+        app_store_exact: c.checks?.itunes?.exactMatches ?? null,
+        app_store_total: c.checks?.itunes?.total ?? null,
+        hn_stories: c.checks?.hn?.total ?? null
+      },
+      wikipedia: c.checks?.wikipedia?.found ? { type: c.checks.wikipedia.type, url: c.checks.wikipedia.url, mentions: c.checks.wikipedia.mentions } : null,
+      wiktionary_editions: c.checks?.wiktionary?.byLang ? Object.keys(c.checks.wiktionary.byLang) : null,
+      dictionary: c.checks?.dictionary?.found ? { phonetic: c.checks.dictionary.phonetic, pos: c.checks.dictionary.pos, def: c.checks.dictionary.def } : null,
+      brand_similar: c.checks?.linguistic?.brandSimilar ?? null,
+      ransomware: c.checks?.ransomware ?? false,
+      warnings: c.checks?.linguistic?.warnings ?? [],
+      notes: c.notes || null
+    })), null, 2);
+  }
+
+  function exportMd() {
+    const sl = candidates.filter(c => c.shortlisted);
+    const list = applySort(sl.length ? sl : candidates);
+    const header = `| Name | Score | ${TLDS.map(t => t.slice(1)).join(' | ')} | Notes |`;
+    const sep    = `|------|------:|${TLDS.map(() => '------').join('|')}|------|`;
+    const mdCell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+    const rows = list.map(c => {
+      const sc = scoreCandidate(c);
+      const d = c.checks?.domains || {};
+      const cell = (s) => s === 'available' ? '✓' : s === 'taken' ? '✗' : s === 'error' ? '!' : '–';
+      return `| ${mdCell(c.name)}${c.shortlisted ? ' ★' : ''} | ${sc?.score ?? '–'} | ${TLDS.map(t => cell(d[t]?.status)).join(' | ')} | ${mdCell((sc?.notes || []).join('; ') || '—')} |`;
+    });
+    return [`# Name clearance — ${new Date().toISOString().slice(0,10)}`, '', header, sep, ...rows].join('\n');
+  }
+
+  function copy(text, btn) {
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<i class="ti ti-check" aria-hidden="true"></i> Copied';
+      setTimeout(() => { btn.innerHTML = orig; }, 1500);
+    });
+  }
+
+  // ---------- Event wiring ----------
+
+  $('add-btn').addEventListener('click', () => {
+    const v = input.value.trim();
+    if (!v) return;
+    addNames(v); input.value = '';
+  });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') $('add-btn').click(); });
+  $('seed-btn').addEventListener('click', () => addNames(SEED.join(',')));
+  $('check-all-btn').addEventListener('click', () => checkAll());
+  $('recheck-stale-btn').addEventListener('click', () => checkAll({ stale: true }));
+  $('clear-btn').addEventListener('click', () => {
+    if (candidates.length && confirm('Clear all candidates?')) {
+      candidates = []; save(); render();
+    }
+  });
+  $('sort-select').addEventListener('change', e => { sortMode = e.target.value; render(); });
+  $('filter-select').addEventListener('change', e => { filterMode = e.target.value; render(); });
+
+  let searchDebounce;
+  const searchInput = $('search-input');
+  searchInput.addEventListener('input', e => {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => { searchQuery = e.target.value.trim(); render(); }, 120);
+  });
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && searchInput.value) {
+      searchInput.value = '';
+      searchQuery = '';
+      render();
+    }
+  });
+
+  // Notes editing — input event + debounce-save per candidate
+  const notesDebounce = new Map();
+  resultsEl.addEventListener('input', e => {
+    if (!e.target.classList?.contains('notes-input')) return;
+    const name = e.target.dataset.name;
+    const c = candidates.find(c => c.name === name);
+    if (!c) return;
+    c.notes = e.target.value;
+    clearTimeout(notesDebounce.get(name));
+    notesDebounce.set(name, setTimeout(() => save(), 400));
+  });
+
+  // Track manual open/close of the notes <details> so we don't re-open after the user collapses.
+  // (toggle event doesn't bubble — use capture phase.)
+  resultsEl.addEventListener('toggle', e => {
+    const det = e.target;
+    if (!(det instanceof HTMLDetailsElement) || !det.classList.contains('notes-block')) return;
+    const card = det.closest('[data-name]');
+    const name = card?.dataset.name;
+    const c = candidates.find(c => c.name === name);
+    if (c) c.notesOpen = det.open;
+  }, true);
+
+  $('enter-compare-btn').addEventListener('click', () => {
+    if (candidates.some(c => c.comparing)) { viewMode = 'compare'; render(); }
+  });
+  $('clear-compare-btn').addEventListener('click', () => {
+    candidates.forEach(c => { c.comparing = false; });
+    if (viewMode === 'compare') viewMode = 'list';
+    save(); render();
+  });
+
+  $('export-tsv').addEventListener('click', e => copy(exportTsv(), e.currentTarget));
+  $('export-json').addEventListener('click', e => copy(exportJson(), e.currentTarget));
+  $('export-md').addEventListener('click', e => copy(exportMd(), e.currentTarget));
+
+  $('backup-btn').addEventListener('click', exportBackup);
+  $('share-btn').addEventListener('click', copyShareLink);
+  const restoreInput = $('restore-input');
+  $('restore-btn').addEventListener('click', () => restoreInput.click());
+  restoreInput.addEventListener('change', e => {
+    const f = e.target.files?.[0];
+    if (f) importBackupFile(f);
+    e.target.value = ''; // allow re-selecting the same file
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    if (e.key === '/') { e.preventDefault(); input.focus(); }
+  });
+
+  resultsEl.addEventListener('click', e => {
+    const btn = e.target.closest('button[data-action], .score-btn[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const name = btn.dataset.name;
+    const c = candidates.find(c => c.name === name);
+    if (!c) return;
+    if (action === 'check') runChecks(name);
+    else if (action === 'recheck') runChecks(name, { force: true });
+    else if (action === 'shortlist') { c.shortlisted = !c.shortlisted; save(); render(); }
+    else if (action === 'remove') {
+      const idx = candidates.findIndex(x => x.name === name);
+      if (idx === -1) return;
+      const removed = candidates[idx];
+      candidates.splice(idx, 1);
+      save(); render();
+      toast(`Removed "${name}"`, {
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            // Restore at the original index (clamped, in case the list grew/shrank).
+            const at = Math.min(idx, candidates.length);
+            candidates.splice(at, 0, removed);
+            save(); render();
+          }
+        }
+      });
+    }
+    else if (action === 'toggle-breakdown') { c.showBreakdown = !c.showBreakdown; render(); }
+    else if (action === 'variants') {
+      if (!c.variants && !c.variantsBusy) runVariants(name);
+      else { c.showVariants = !c.showVariants; save(); render(); }
+    }
+    else if (action === 'toggle-compare') {
+      c.comparing = !c.comparing;
+      // If we just removed the last one while viewing the compare grid, bounce back to list.
+      if (viewMode === 'compare' && candidates.filter(x => x.comparing).length === 0) viewMode = 'list';
+      save(); render();
+    }
+    else if (action === 'exit-compare') { viewMode = 'list'; render(); }
+    else if (action === 'recheck-variants') runVariants(name);
+    else if (action === 'adopt-variants') adoptVariants(name);
+    else if (action === 'speak') speakName(name, btn);
+    else if (action === 'ask') sendPrompt(`Tell me about "${name}" as a brand name — origin, what it evokes, strongest concerns and strongest fits, and three coined variations that preserve the feel but improve clearance odds.`);
+  });
+
+  load().then(() => importFromHash());
+})();
+</script>
+
+<style>
+.toolbar { display: flex; gap: 12px; margin-bottom: 1rem; align-items: center; font-size: 13px; color: var(--color-text-secondary); flex-wrap: wrap; }
+.ctl { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.ctl-label { color: var(--color-text-tertiary); }
+.ctl select { font-size: 12px; padding: 3px 6px; }
+.ctl-spacer { flex: 1; }
+.export-group { display: inline-flex; gap: 4px; }
+.btn-sm { font-size: 12px; padding: 4px 10px; }
+.progress { height: 3px; background: var(--color-border-tertiary); border-radius: 2px; overflow: hidden; margin-bottom: 12px; }
+.progress-fill { height: 100%; background: var(--color-text-info); transition: width 0.3s ease; }
+.rate-banner { align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 12px; background: #FFF6E5; color: #855300; border: 0.5px solid #F5D9A1; border-radius: var(--border-radius-md); font-size: 13px; }
+.rate-banner:not([hidden]) { display: flex; }
+.rate-banner .ti { font-size: 16px; }
+.play-btn { background: none; border: none; padding: 2px 4px; cursor: pointer; color: var(--color-text-tertiary); display: inline-flex; align-items: center; font-size: 14px; line-height: 1; border-radius: var(--border-radius-sm); }
+.play-btn:hover { color: var(--color-text-info); background: var(--color-background-secondary, #F8F7F4); }
+.play-btn:focus-visible { outline: 1.5px solid var(--color-text-info); outline-offset: 1px; }
+.play-btn.playing { color: var(--color-text-info); }
+.play-btn.playing .ti { animation: play-pulse 0.6s ease-in-out infinite alternate; }
+@keyframes play-pulse { from { transform: scale(1); opacity: 0.6; } to { transform: scale(1.15); opacity: 1; } }
+.empty { text-align: center; padding: 2rem 1rem; color: var(--color-text-tertiary); font-size: 14px; border: 0.5px dashed var(--color-border-tertiary); border-radius: var(--border-radius-lg); }
+.card { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 14px 16px; margin-bottom: 12px; }
+.card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 8px; }
+.name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.name { font-size: 18px; font-weight: 500; }
+.star-on { color: var(--color-text-warning); font-size: 16px; display: inline-flex; }
+.warn-pill { background: #FCEBEB; color: #791F1F; font-size: 11px; padding: 2px 8px; border-radius: var(--border-radius-md); display: inline-flex; align-items: center; gap: 4px; }
+.stale-pill { background: #F1EFE8; color: #6A6A66; font-size: 11px; padding: 2px 8px; border-radius: var(--border-radius-md); display: inline-flex; align-items: center; gap: 4px; }
+.lineage { background: var(--color-background-secondary, #F8F7F4); color: var(--color-text-tertiary); font-size: 11px; padding: 2px 8px; border-radius: var(--border-radius-md); display: inline-flex; align-items: center; gap: 4px; }
+.wikt-lang { display: inline-block; padding: 0 4px; }
+.wikt-lang strong { text-transform: uppercase; font-size: 10px; color: var(--color-text-tertiary); margin-right: 2px; }
+.ipa { font-family: var(--font-mono); font-size: 12px; color: var(--color-text-tertiary); padding: 1px 6px; background: var(--color-background-secondary, #F8F7F4); border-radius: var(--border-radius-sm, 4px); }
+.ipa-inline { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-tertiary); margin-left: 4px; }
+
+.toast-container { position: fixed; bottom: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 100; max-width: 380px; pointer-events: none; }
+.toast { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 10px 14px; font-size: 13px; display: flex; align-items: center; gap: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.10); animation: toast-in 0.18s ease; pointer-events: auto; }
+.toast-out { animation: toast-out 0.18s ease forwards; }
+@keyframes toast-in  { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes toast-out { to { opacity: 0; transform: translateY(8px); } }
+.toast-success { border-left: 3px solid var(--color-text-success); }
+.toast-warning { border-left: 3px solid var(--color-text-warning); }
+.toast-error   { border-left: 3px solid var(--color-text-danger); }
+.toast-info    { border-left: 3px solid var(--color-text-info); }
+.toast-msg { flex: 1; line-height: 1.4; color: var(--color-text-primary); }
+.toast-action { background: var(--color-background-primary); border: 0.5px solid var(--color-text-info); color: var(--color-text-info); padding: 4px 10px; border-radius: var(--border-radius-sm, 4px); cursor: pointer; font-size: 12px; font-family: inherit; }
+.toast-action:hover { background: var(--color-text-info); color: white; }
+.toast-close { background: none; border: none; color: var(--color-text-tertiary); cursor: pointer; padding: 0 4px; font-size: 18px; line-height: 1; font-family: inherit; }
+.toast-close:hover { color: var(--color-text-primary); }
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+  .toast-out { animation: none; opacity: 0; }
+}
+
+.btn-active { background: var(--color-text-info); color: white; border-color: var(--color-text-info); }
+.btn-active:hover { background: var(--color-text-info); opacity: 0.9; }
+
+.compare-bar { align-items: center; gap: 12px; padding: 8px 12px; margin-bottom: 12px; background: #E8F1FF; color: #1D4ED8; border: 0.5px solid #BFDBFE; border-radius: var(--border-radius-md); font-size: 13px; }
+.compare-bar:not([hidden]) { display: flex; }
+.compare-bar #enter-compare-btn { margin-left: auto; background: var(--color-text-info); color: white; border-color: var(--color-text-info); }
+.compare-bar #enter-compare-btn:hover { opacity: 0.9; background: var(--color-text-info); }
+
+.compare-view { width: 100%; }
+.compare-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+.compare-hint { font-size: 12px; color: var(--color-text-tertiary); }
+.compare-grid { overflow-x: auto; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); background: var(--color-background-primary); }
+.compare-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 600px; }
+.compare-table th, .compare-table td { padding: 10px 12px; border-bottom: 0.5px solid var(--color-border-tertiary); vertical-align: top; text-align: left; }
+.compare-table tr:last-child th, .compare-table tr:last-child td { border-bottom: none; }
+.compare-table thead th { background: var(--color-background-secondary, #F8F7F4); position: sticky; top: 0; z-index: 1; border-bottom-width: 1px; }
+.compare-table tbody th { position: sticky; left: 0; background: var(--color-background-secondary, #F8F7F4); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-tertiary); white-space: nowrap; min-width: 120px; z-index: 1; }
+.cmp-row-label { min-width: 120px; }
+.cmp-name-head { position: relative; min-width: 180px; }
+.cmp-name { font-size: 16px; font-weight: 500; color: var(--color-text-primary); padding-right: 24px; }
+.cmp-subname { font-size: 11px; color: var(--color-text-tertiary); margin-top: 2px; }
+.cmp-remove { position: absolute; top: 8px; right: 8px; background: none; border: none; padding: 2px 4px; cursor: pointer; color: var(--color-text-tertiary); border-radius: var(--border-radius-sm, 4px); }
+.cmp-remove:hover { color: var(--color-text-danger); background: var(--color-background-primary); }
+.cmp-winner { background: #EAF3DE !important; }
+.cmp-winner::before { content: '✓ '; color: #27500A; font-weight: 600; }
+.cmp-na { color: var(--color-text-tertiary); font-style: italic; font-size: 12px; }
+.cmp-pkg-bad { display: inline-block; background: #FCEBEB; color: #791F1F; font-size: 11px; padding: 1px 6px; border-radius: var(--border-radius-sm, 4px); margin-right: 4px; }
+.cmp-notes { font-size: 12px; line-height: 1.4; color: var(--color-text-secondary); white-space: normal; max-width: 240px; }
+.cmp-notes-cell { max-width: 260px; }
+@media (max-width: 720px) {
+  .compare-table { font-size: 12px; }
+  .compare-table th, .compare-table td { padding: 8px; }
+  .cmp-name-head { min-width: 140px; }
+  .cmp-name { font-size: 14px; }
+}
+.warn-chip { background: #FFF6E5; color: #855300; font-size: 10px; padding: 1px 6px; border-radius: var(--border-radius-md); border: 0.5px solid #F5D9A1; }
+.variants-block { background: var(--color-background-secondary, #F8F7F4); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 10px 12px; margin: 0 0 12px; }
+.variants-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.variants-meta { font-size: 11px; color: var(--color-text-tertiary); }
+.variants-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 12px; margin-top: 8px; }
+.variant-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-family: var(--font-mono); gap: 8px; padding: 2px 0; }
+.variant-name { color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.variant-label { font-family: var(--font-sans); color: var(--color-text-tertiary); font-size: 10px; margin-left: 6px; }
+.variant-right { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.variants-summary { margin-top: 10px; padding-top: 8px; border-top: 0.5px solid var(--color-border-tertiary); font-size: 12px; color: var(--color-text-secondary); }
+.link-btn { background: none; border: none; color: var(--color-text-info); padding: 0; cursor: pointer; text-decoration: underline; font-family: inherit; font-size: inherit; display: inline-flex; align-items: center; gap: 3px; }
+.link-btn:hover { opacity: 0.8; }
+
+.notes-block { margin: 8px 0 12px; }
+.notes-block summary { font-size: 12px; color: var(--color-text-tertiary); cursor: pointer; padding: 4px 0; display: inline-flex; align-items: center; gap: 4px; list-style: none; }
+.notes-block summary::-webkit-details-marker { display: none; }
+.notes-block summary:hover { color: var(--color-text-secondary); }
+.notes-input { width: 100%; min-height: 50px; padding: 8px 10px; margin-top: 4px; font-size: 13px; line-height: 1.4; font-family: var(--font-sans); background: var(--color-background-secondary, #F8F7F4); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); resize: vertical; color: var(--color-text-primary); box-sizing: border-box; }
+.notes-input:focus { outline: 2px solid var(--color-text-info); outline-offset: 1px; }
+.sub { font-size: 13px; color: var(--color-text-secondary); margin-top: 2px; }
+.age { color: var(--color-text-tertiary); }
+.score-block { text-align: right; flex-shrink: 0; }
+.score-btn { background: none; border: none; font-size: 28px; font-weight: 500; line-height: 1; padding: 0; cursor: pointer; font-family: inherit; }
+.score-btn:hover { opacity: 0.8; }
+.score-label { font-size: 11px; color: var(--color-text-tertiary); margin-top: 2px; }
+.breakdown { background: var(--color-background-secondary, #F8F7F4); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 10px 12px; margin: 8px 0 12px; font-size: 12px; }
+.bd-title { color: var(--color-text-tertiary); text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; margin-bottom: 6px; }
+.bd-row { display: flex; justify-content: space-between; padding: 2px 0; }
+.bd-pos .bd-delta { color: var(--color-text-success); }
+.bd-neg .bd-delta { color: var(--color-text-danger); }
+.bd-delta { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.check-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 12px 0; border-top: 0.5px solid var(--color-border-tertiary); border-bottom: 0.5px solid var(--color-border-tertiary); margin: 8px 0 12px; }
+.section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-tertiary); margin-bottom: 6px; }
+.tld-list { display: flex; flex-direction: column; gap: 4px; }
+.tld-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-family: var(--font-mono); gap: 8px; }
+.tld-name { color: var(--color-text-secondary); }
+.tld-right { display: inline-flex; align-items: center; gap: 6px; }
+.tld { font-family: var(--font-sans); font-size: 12px; padding: 2px 8px; border-radius: var(--border-radius-md); display: inline-flex; align-items: center; gap: 4px; }
+.tld-ok { background: #EAF3DE; color: #27500A; }
+.tld-bad { background: #FCEBEB; color: #791F1F; }
+.tld-unclear { background: #F1EFE8; color: #444441; }
+.tld-error { background: #F1EFE8; color: #791F1F; font-style: italic; cursor: help; }
+.tld-pending { color: var(--color-text-tertiary); font-size: 12px; }
+.reg-buy { display: inline-flex; gap: 3px; }
+.reg-link { font-size: 10px; padding: 1px 5px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-sm, 4px); color: var(--color-text-info); font-family: var(--font-sans); }
+.signal { font-size: 13px; line-height: 1.5; color: var(--color-text-primary); }
+.sig-ok { color: var(--color-text-success); }
+.sig-bad-link { color: var(--color-text-danger); text-decoration: underline; }
+.sig-warn { color: var(--color-text-warning); }
+.sig-info { color: var(--color-text-secondary); }
+.mini-list { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.mini-link { font-size: 12px; color: var(--color-text-info); font-family: var(--font-mono); }
+.link-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.link-out { font-size: 12px; color: var(--color-text-info); display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); }
+.link-out-inline { font-size: 12px; color: var(--color-text-info); }
+.card-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.card-actions button { font-size: 12px; padding: 4px 10px; }
+kbd { background: var(--color-background-secondary, #F1EFE8); border: 0.5px solid var(--color-border-tertiary); border-radius: 3px; padding: 1px 4px; font-family: var(--font-mono); font-size: 11px; }
+@media (max-width: 540px) {
+  .check-grid { grid-template-columns: 1fr; }
+  .toolbar { gap: 8px; }
+  .ctl { font-size: 11px; }
+  .variants-grid { grid-template-columns: 1fr; }
+}
+</style>
+</div>
