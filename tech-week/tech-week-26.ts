@@ -26,6 +26,7 @@ import { generateText } from "ai";
 import dotenv from "dotenv";
 import { z } from "zod";
 import { type Coordinates2D, Distance } from "./distance-formulas.js";
+import { getArg, hasFlag } from "./lib/cli.js";
 import { GoogleMapsService } from "./map.js";
 
 // Resolve paths relative to this script so the file works from any CWD.
@@ -36,88 +37,57 @@ const PROJECT_ROOT = join(SCRIPT_DIR, "..");
 dotenv.config({ path: join(PROJECT_ROOT, ".env") });
 
 // ---------------------------------------------------------------------------
-// CLI args
+// Options
 // ---------------------------------------------------------------------------
 
-function getArg(flag: string): string | undefined {
-	const idx = process.argv.indexOf(flag);
-	if (idx === -1) return undefined;
-	const next = process.argv[idx + 1];
-	if (!next || next.startsWith("--")) return undefined;
-	return next;
+export interface RunOptions {
+	city?: string;
+	/** Full display title. Falls back to "{city} Tech Week 2026" when omitted. */
+	title?: string;
+	/**
+	 * Drop events whose start is in the past (with a 1-hour grace window).
+	 * Defaults to true — itineraries are about what to do next, not what
+	 * already happened.
+	 */
+	futureOnly?: boolean;
+	/**
+	 * When true, run the greedy travel-time-aware non-overlap picker that
+	 * collapses candidates down to ~25. Default false — most users want to
+	 * see ALL above-score events on the map and decide which to attend.
+	 */
+	greedyNonOverlap?: boolean;
+	calendarPath?: string;
+	geocodeCachePath?: string;
+	responsePath?: string;
+	htmlPath?: string;
+	dataPath?: string;
+	avgSpeedKmh?: number;
+	/** ISO offset like "-04:00" used to interpret event-local times. */
+	tzOffset?: string;
+	minPriorityScore?: number;
+	/** Skip xdg-open for response.md, itinerary.html, and each event URL. */
+	noOpen?: boolean;
 }
 
-function hasFlag(flag: string): boolean {
-	return process.argv.includes(flag);
+export interface RunResult {
+	responsePath: string;
+	htmlPath?: string;
+	dataPath?: string;
+	totalEvents: number;
+	candidateCount: number;
+	selectedCount: number;
 }
-
-const CITY_LABEL = getArg("--city") ?? "NYC";
-const CITY_SLUG = CITY_LABEL.toLowerCase().replace(/\s+/g, "-");
-const IS_DEFAULT_CITY = CITY_LABEL === "NYC";
-
-function citySuffixed(defaultName: string, suffixedName: string): string {
-	return IS_DEFAULT_CITY ? defaultName : suffixedName;
-}
-
-const NO_OPEN = hasFlag("--no-open");
-
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-const SOURCE_FILE = resolve(
-	getArg("--calendar") ??
-		join(
-			SCRIPT_DIR,
-			citySuffixed(
-				"tech-week-calendar.json",
-				`tech-week-${CITY_SLUG}-calendar.json`,
-			),
-		),
-);
-const GEOCODE_CACHE_FILE = resolve(
-	getArg("--geocode-cache") ??
-		join(
-			SCRIPT_DIR,
-			citySuffixed(
-				"tech-week-geocoded.json",
-				`tech-week-${CITY_SLUG}-geocoded.json`,
-			),
-		),
-);
-const RESPONSE_FILE = resolve(
-	getArg("--response") ??
-		join(SCRIPT_DIR, citySuffixed("response.md", `response-${CITY_SLUG}.md`)),
-);
-const ITINERARY_HTML_FILE = resolve(
-	getArg("--html") ??
-		join(
-			SCRIPT_DIR,
-			citySuffixed("itinerary.html", `itinerary-${CITY_SLUG}.html`),
-		),
-);
-const ITINERARY_DATA_FILE = resolve(
-	getArg("--data") ??
-		join(
-			SCRIPT_DIR,
-			citySuffixed("itinerary.data.js", `itinerary-${CITY_SLUG}.data.js`),
-		),
-);
 
 const MAX_CANDIDATES = 100;
 const EVENT_DURATION_MIN = 120;
-// Average urban door-to-door speed for travel-time estimation. NYC and Boston
-// both land around 15-20 km/h with a mix of walk/transit/rideshare.
-const AVG_SPEED_KMH = Number(getArg("--avg-speed-kmh") ?? 18);
-// Eastern Daylight Time covers both NYC Tech Week (June) and Boston Tech Week
-// (late May), so the same offset works for both cities.
-const TIMEZONE_OFFSET = getArg("--tz-offset") ?? "-04:00";
 
-// Drop any event whose priorityScore is below this. Set to 0 to disable
-// (i.e., consider every event regardless of how well its description matches
-// the keyword list in scrape-partiful.ts). Raise to tighten the candidate
-// pool; lower to widen.
-const MIN_PRIORITY_SCORE = 3;
+function citySuffixed(
+	city: string,
+	defaultName: string,
+	suffixedName: string,
+): string {
+	return city === "NYC" ? defaultName : suffixedName;
+}
 
 // ---------------------------------------------------------------------------
 // Schema (matches tech-week-calendar.json built from www.tech-week.com.har)
@@ -152,6 +122,18 @@ const CalendarEventSchema = z.object({
 	description: z.string().nullable().optional(),
 	priorityScore: z.number().optional(),
 	priorityMatches: z.array(z.string()).optional(),
+	// Optional per-event geo override. When present, geocodeLocations skips
+	// the Google Maps call for this event's location key. Populated by
+	// scrape-partiful (from Partiful __NEXT_DATA__) and by extractors that
+	// have ground-truth coords (luma-discover, partiful-explore).
+	coords: z
+		.object({ lat: z.number(), lng: z.number() })
+		.optional(),
+	// Optional full street address (e.g. "334 Furman St, Brooklyn, NY
+	// 11201"). When present, geocodeLocations geocodes it (cached per
+	// address) and uses the building-level result to override `coords`,
+	// upgrading partiful's 2-decimal sll (~1km) to ~10m precision.
+	address: z.string().optional(),
 });
 
 const CalendarFileSchema = z.object({
@@ -167,10 +149,8 @@ type CalendarEvent = z.infer<typeof CalendarEventSchema>;
 // Time helpers
 // ---------------------------------------------------------------------------
 
-function eventStartMs(event: CalendarEvent): number {
-	return new Date(
-		`${event.date}T${event.time}${TIMEZONE_OFFSET}`,
-	).getTime();
+function eventStartMs(event: CalendarEvent, tzOffset: string): number {
+	return new Date(`${event.date}T${event.time}${tzOffset}`).getTime();
 }
 
 function formatTimeOfDay(time: string): string {
@@ -187,28 +167,93 @@ function formatTimeOfDay(time: string): string {
 
 type GeocodeCache = Record<string, Coordinates2D | null>;
 
-async function loadGeocodeCache(): Promise<GeocodeCache> {
+async function loadGeocodeCache(cachePath: string): Promise<GeocodeCache> {
 	try {
-		const data = await Bun.file(GEOCODE_CACHE_FILE).json();
+		const data = await Bun.file(cachePath).json();
 		return data ?? {};
 	} catch {
 		return {};
 	}
 }
 
-async function saveGeocodeCache(cache: GeocodeCache): Promise<void> {
-	await Bun.write(GEOCODE_CACHE_FILE, JSON.stringify(cache, null, 2));
+async function saveGeocodeCache(
+	cachePath: string,
+	cache: GeocodeCache,
+): Promise<void> {
+	await Bun.write(cachePath, JSON.stringify(cache, null, 2));
 }
 
 async function geocodeLocations(
 	events: CalendarEvent[],
 	mapsService: GoogleMapsService,
+	cachePath: string,
 ): Promise<Map<string, Coordinates2D>> {
-	const cache = await loadGeocodeCache();
-	// Pair each unique neighborhood/location with the city we saw it in so we
-	// can disambiguate names that exist in multiple cities (e.g. "Chinatown",
-	// "Downtown") when geocoding. Cache keys remain bare-location since each
-	// calendar file is single-city and writes to its own cache file.
+	const cache = await loadGeocodeCache(cachePath);
+
+	// Pass 0: events with a full street address get building-level coords
+	// (~10m) via Google Geocoding, overriding any 2-decimal sll fallback.
+	// Cached per-address so re-runs are free.
+	let addressHits = 0;
+	let addressNew = 0;
+	let addressFailed = 0;
+	for (const event of events) {
+		if (!event.address) continue;
+		const cacheKey = `__addr__:${event.address}`;
+		const cached = cache[cacheKey];
+		if (cached) {
+			(event as { coords?: Coordinates2D }).coords = cached;
+			addressHits += 1;
+			continue;
+		}
+		try {
+			const result = await mapsService.geocodeAddress(event.address);
+			if (result) {
+				const c: Coordinates2D = {
+					lat: result.geometry.location.lat,
+					lng: result.geometry.location.lng,
+				};
+				cache[cacheKey] = c;
+				(event as { coords?: Coordinates2D }).coords = c;
+				addressNew += 1;
+			} else {
+				// Negative-cache so we don't re-pay on misses next run.
+				cache[cacheKey] = null;
+				addressFailed += 1;
+			}
+		} catch (error) {
+			console.error(
+				`Address geocoding failed for "${event.address}":`,
+				(error as Error).message,
+			);
+			addressFailed += 1;
+		}
+	}
+	if (addressHits || addressNew || addressFailed) {
+		console.log(
+			`Address geocoding: cached=${addressHits} new=${addressNew} failed=${addressFailed}`,
+		);
+	}
+
+	// Pass 1: events that ship their own coords (from Partiful __NEXT_DATA__
+	// `sll=`, Luma discover `coordinate`, or partiful-explore `sll=`) bypass
+	// Google Maps entirely. They get a per-event cache key so distinct venues
+	// in the same neighborhood don't collide.
+	let preGeocoded = 0;
+	for (const event of events) {
+		if (event.coords && event.location) {
+			if (!(event.location in cache)) {
+				cache[event.location] = {
+					lat: event.coords.lat,
+					lng: event.coords.lng,
+				};
+				preGeocoded += 1;
+			}
+		}
+	}
+
+	// Pass 2: pair each remaining unique location with the city we saw it
+	// in so we can disambiguate names that exist in multiple cities
+	// (e.g. "Chinatown", "Downtown") when geocoding.
 	const unique = new Map<string, string>();
 	for (const event of events) {
 		if (event.location && !unique.has(event.location)) {
@@ -236,9 +281,11 @@ async function geocodeLocations(
 		}
 	}
 
-	if (added > 0) {
-		await saveGeocodeCache(cache);
-		console.log(`Geocoded ${added} new location(s); cache size: ${unique.size}`);
+	if (added > 0 || preGeocoded > 0) {
+		await saveGeocodeCache(cachePath, cache);
+		console.log(
+			`Geocoded ${added} new location(s) (${preGeocoded} pre-supplied); cache size: ${Object.keys(cache).length}`,
+		);
 	}
 
 	const resolved = new Map<string, Coordinates2D>();
@@ -252,17 +299,23 @@ async function geocodeLocations(
 // Scheduling (travel-time-aware greedy)
 // ---------------------------------------------------------------------------
 
-function estimatedTravelMinutes(a: Coordinates2D, b: Coordinates2D): number {
+function estimatedTravelMinutes(
+	a: Coordinates2D,
+	b: Coordinates2D,
+	avgSpeedKmh: number,
+): number {
 	const km = Distance.haversine(a, b);
-	return (km / AVG_SPEED_KMH) * 60;
+	return (km / avgSpeedKmh) * 60;
 }
 
 function findNonOverlappingEvents(
 	events: CalendarEvent[],
 	coords: Map<string, Coordinates2D>,
+	tzOffset: string,
+	avgSpeedKmh: number,
 ): CalendarEvent[] {
 	const sorted = [...events].sort(
-		(a, b) => eventStartMs(a) - eventStartMs(b),
+		(a, b) => eventStartMs(a, tzOffset) - eventStartMs(b, tzOffset),
 	);
 
 	const selected: CalendarEvent[] = [];
@@ -273,16 +326,17 @@ function findNonOverlappingEvents(
 		}
 
 		const prev = selected[selected.length - 1];
-		const prevEndMs = eventStartMs(prev) + EVENT_DURATION_MIN * 60_000;
+		const prevEndMs = eventStartMs(prev, tzOffset) + EVENT_DURATION_MIN * 60_000;
 
 		let travelMs = 0;
 		const prevCoords = prev.location ? coords.get(prev.location) : undefined;
 		const nextCoords = event.location ? coords.get(event.location) : undefined;
 		if (prevCoords && nextCoords) {
-			travelMs = estimatedTravelMinutes(prevCoords, nextCoords) * 60_000;
+			travelMs =
+				estimatedTravelMinutes(prevCoords, nextCoords, avgSpeedKmh) * 60_000;
 		}
 
-		if (eventStartMs(event) >= prevEndMs + travelMs) {
+		if (eventStartMs(event, tzOffset) >= prevEndMs + travelMs) {
 			selected.push(event);
 		}
 	}
@@ -437,7 +491,13 @@ function toItineraryEvent(
 	index: number,
 	coords: Map<string, Coordinates2D>,
 ): ItineraryEvent {
-	const c = event.location ? coords.get(event.location) : undefined;
+	// Per-event coords (from partiful __NEXT_DATA__, luma JSON-LD, partiful
+	// /explore sll, etc.) take precedence over the location-string cache.
+	// Without this, 100 events all labeled "Midtown" would stack on the
+	// first event's coords even though each has its own ground-truth point.
+	const c =
+		event.coords ??
+		(event.location ? coords.get(event.location) : undefined);
 	return {
 		label: String.fromCharCode(65 + (index % 26)),
 		id: event.id,
@@ -498,12 +558,12 @@ window.ITINERARY_DATA = ${json};
  * data file — no code changes required.
  */
 function buildItineraryHtml(
-	city: string,
+	headerTitle: string,
 	dataFileName: string,
 ): string {
 	const escapeAttr = (s: string): string =>
 		s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-	const title = escapeAttr(`${city} Tech Week 2026 — Itinerary`);
+	const title = escapeAttr(`${headerTitle} — Itinerary`);
 	const safeDataSrc = escapeAttr(dataFileName);
 
 	return `<!DOCTYPE html>
@@ -555,7 +615,7 @@ function buildItineraryHtml(
 <div id="app">
   <aside id="sidebar">
     <header>
-      <h1>${escapeAttr(`${city} Tech Week 2026`)}</h1>
+      <h1>${escapeAttr(headerTitle)}</h1>
       <div class="sub" id="summary"></div>
     </header>
     <div id="days"></div>
@@ -805,7 +865,69 @@ document.head.appendChild(s);
 // Main
 // ---------------------------------------------------------------------------
 
-(async () => {
+export async function run(options: RunOptions = {}): Promise<RunResult> {
+	const cityLabel = options.city ?? "NYC";
+	const citySlug = cityLabel.toLowerCase().replace(/\s+/g, "-");
+	const sourceFile = resolve(
+		options.calendarPath ??
+			join(
+				SCRIPT_DIR,
+				citySuffixed(
+					cityLabel,
+					"tech-week-calendar.json",
+					`tech-week-${citySlug}-calendar.json`,
+				),
+			),
+	);
+	const geocodeCacheFile = resolve(
+		options.geocodeCachePath ??
+			join(
+				SCRIPT_DIR,
+				citySuffixed(
+					cityLabel,
+					"tech-week-geocoded.json",
+					`tech-week-${citySlug}-geocoded.json`,
+				),
+			),
+	);
+	const responseFile = resolve(
+		options.responsePath ??
+			join(
+				SCRIPT_DIR,
+				citySuffixed(cityLabel, "response.md", `response-${citySlug}.md`),
+			),
+	);
+	const itineraryHtmlFile = resolve(
+		options.htmlPath ??
+			join(
+				SCRIPT_DIR,
+				citySuffixed(
+					cityLabel,
+					"itinerary.html",
+					`itinerary-${citySlug}.html`,
+				),
+			),
+	);
+	const itineraryDataFile = resolve(
+		options.dataPath ??
+			join(
+				SCRIPT_DIR,
+				citySuffixed(
+					cityLabel,
+					"itinerary.data.js",
+					`itinerary-${citySlug}.data.js`,
+				),
+			),
+	);
+	const avgSpeedKmh = options.avgSpeedKmh ?? 18;
+	const tzOffset = options.tzOffset ?? "-04:00";
+	const minPriorityScore = options.minPriorityScore ?? 3;
+	const noOpen = options.noOpen ?? false;
+	const futureOnly = options.futureOnly ?? true;
+	const greedyNonOverlap = options.greedyNonOverlap ?? false;
+	// Title precedence: explicit options.title → legacy "{city} Tech Week 2026"
+	const displayTitle = options.title ?? `${cityLabel} Tech Week 2026`;
+
 	try {
 		const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? "";
 		if (!apiKey) {
@@ -815,26 +937,44 @@ document.head.appendChild(s);
 		}
 		const mapsService = new GoogleMapsService(apiKey || "no-op");
 
-		const raw = await Bun.file(SOURCE_FILE)
+		const raw = await Bun.file(sourceFile)
 			.json()
 			.catch((error: unknown) => {
-				console.error(`Failed to read ${SOURCE_FILE}:`, error);
+				console.error(`Failed to read ${sourceFile}:`, error);
 				return null;
 			});
-		if (!raw) return;
+		if (!raw) {
+			return {
+				responsePath: responseFile,
+				totalEvents: 0,
+				candidateCount: 0,
+				selectedCount: 0,
+			};
+		}
 
 		const parseResult = CalendarFileSchema.safeParse(raw);
 		if (!parseResult.success) {
 			console.error("Schema mismatch in calendar JSON:", parseResult.error);
-			return;
+			return {
+				responsePath: responseFile,
+				totalEvents: 0,
+				candidateCount: 0,
+				selectedCount: 0,
+			};
 		}
 
+		// Recomputed each run — "now" is dynamic so re-runs naturally roll
+		// past-events off the itinerary. 1-hour grace window keeps events
+		// that just started visible.
+		const nowMs = Date.now();
+		const futureFloorMs = nowMs - 60 * 60 * 1000;
 		const usable = parseResult.data.events.filter(
 			(event) =>
 				!event.isInviteOnly &&
 				!!event.location &&
 				!!event.externalHref &&
-				!!event.name,
+				!!event.name &&
+				(!futureOnly || eventStartMs(event, tzOffset) >= futureFloorMs),
 		);
 
 		// Clamp the threshold to the actual keyword count so a small/edited
@@ -843,7 +983,7 @@ document.head.appendChild(s);
 		// always yield zero events.
 		const keywordCount = parseResult.data.priorityKeywords?.length ?? 0;
 		const effectiveMin = Math.min(
-			MIN_PRIORITY_SCORE,
+			minPriorityScore,
 			Math.max(1, keywordCount),
 		);
 
@@ -859,20 +999,28 @@ document.head.appendChild(s);
 			.slice(0, MAX_CANDIDATES);
 
 		const thresholdNote =
-			effectiveMin < MIN_PRIORITY_SCORE
-				? ` (clamped from MIN_PRIORITY_SCORE=${MIN_PRIORITY_SCORE} because only ${keywordCount} keyword${keywordCount === 1 ? "" : "s"} active)`
+			effectiveMin < minPriorityScore
+				? ` (clamped from min-priority-score=${minPriorityScore} because only ${keywordCount} keyword${keywordCount === 1 ? "" : "s"} active)`
 				: "";
 		console.log(
 			`Loaded ${parseResult.data.events.length} events; ${usable.length} usable; ${priorityFiltered.length} above score ${effectiveMin}${thresholdNote}; ${candidates.length} taken as candidates.`,
 		);
 
 		const coords = apiKey
-			? await geocodeLocations(candidates, mapsService)
+			? await geocodeLocations(candidates, mapsService, geocodeCacheFile)
 			: new Map<string, Coordinates2D>();
 
-		const selected = findNonOverlappingEvents(candidates, coords);
+		// Default: hand the user ALL above-score candidates so they can pick
+		// what to RSVP to. Greedy non-overlap is opt-in via
+		// --greedy-non-overlap (or config.itinerary.greedyNonOverlap) — it
+		// collapses to ~25 events as if attendance is guaranteed.
+		const selected = greedyNonOverlap
+			? findNonOverlappingEvents(candidates, coords, tzOffset, avgSpeedKmh)
+			: candidates;
 		console.log(
-			`Selected ${selected.length} non-overlapping events (travel-time-aware).`,
+			greedyNonOverlap
+				? `Selected ${selected.length} non-overlapping events (travel-time-aware).`
+				: `Showing all ${selected.length} candidates (conflicts visible — pick what to RSVP to).`,
 		);
 
 		const routeInfo =
@@ -914,7 +1062,7 @@ document.head.appendChild(s);
 			url: event.externalHref ?? "",
 		}));
 
-		const prompt = `Given this pre-filtered itinerary of ${CITY_LABEL} Tech Week 2026 events,
+		const prompt = `Given this pre-filtered itinerary of ${displayTitle} events,
 identify the highest-signal events from the candidate pool.
 
 The candidates were already filtered to those whose descriptions matched a priority
@@ -959,7 +1107,7 @@ reader can click into the interactive route for each day.`;
 				error,
 			);
 			text =
-				`# ${CITY_LABEL} Tech Week 2026 — Itinerary\n\n` +
+				`# ${displayTitle} — Itinerary\n\n` +
 				`${selected.length} non-overlapping events selected.\n\n` +
 				(itineraryMapUrl ? `![map](${itineraryMapUrl})\n\n` : "") +
 				dayDeeplinksMd +
@@ -975,7 +1123,10 @@ reader can click into the interactive route for each day.`;
 				routeInfo;
 		}
 
-		await Bun.write(RESPONSE_FILE, text);
+		await Bun.write(responseFile, text);
+
+		let writtenHtmlPath: string | undefined;
+		let writtenDataPath: string | undefined;
 
 		// Write the fully interactive itinerary page alongside response.md.
 		// Requires GOOGLE_MAPS_API_KEY for the client-side Maps JS API; without
@@ -985,22 +1136,24 @@ reader can click into the interactive route for each day.`;
 			// so the same HTML can be shared and reused for different itineraries.
 			// Pass the data filename so the HTML's <script src> matches the
 			// city-specific data file written alongside it.
-			const dataFileName = basename(ITINERARY_DATA_FILE);
-			const html = buildItineraryHtml(CITY_LABEL, dataFileName);
+			const dataFileName = basename(itineraryDataFile);
+			const html = buildItineraryHtml(displayTitle, dataFileName);
 			const dataJs = buildItineraryDataJs(selected, coords, apiKey);
-			await Bun.write(ITINERARY_HTML_FILE, html);
-			await Bun.write(ITINERARY_DATA_FILE, dataJs);
-			console.log(`Wrote interactive itinerary → ${ITINERARY_HTML_FILE}`);
-			console.log(`Wrote itinerary data       → ${ITINERARY_DATA_FILE}`);
-			if (!NO_OPEN) {
+			await Bun.write(itineraryHtmlFile, html);
+			await Bun.write(itineraryDataFile, dataJs);
+			writtenHtmlPath = itineraryHtmlFile;
+			writtenDataPath = itineraryDataFile;
+			console.log(`Wrote interactive itinerary → ${itineraryHtmlFile}`);
+			console.log(`Wrote itinerary data       → ${itineraryDataFile}`);
+			if (!noOpen) {
 				Bun.spawn({
-					cmd: ["/bin/sh", "-c", `xdg-open "${ITINERARY_HTML_FILE}"`],
+					cmd: ["/bin/sh", "-c", `xdg-open "${itineraryHtmlFile}"`],
 				});
 			}
 		}
 
-		if (!NO_OPEN) {
-			Bun.spawn({ cmd: ["/bin/sh", "-c", `xdg-open "${RESPONSE_FILE}"`] });
+		if (!noOpen) {
+			Bun.spawn({ cmd: ["/bin/sh", "-c", `xdg-open "${responseFile}"`] });
 
 			for (const event of selected) {
 				if (!event.externalHref) continue;
@@ -1009,9 +1162,51 @@ reader can click into the interactive route for each day.`;
 				});
 			}
 		} else {
-			console.log(`(--no-open) Skipping browser-open for ${selected.length} events`);
+			console.log(
+				`(--no-open) Skipping browser-open for ${selected.length} events`,
+			);
 		}
+
+		return {
+			responsePath: responseFile,
+			htmlPath: writtenHtmlPath,
+			dataPath: writtenDataPath,
+			totalEvents: parseResult.data.events.length,
+			candidateCount: candidates.length,
+			selectedCount: selected.length,
+		};
 	} catch (error) {
 		console.error("An unexpected error occurred:", error);
+		return {
+			responsePath: responseFile,
+			totalEvents: 0,
+			candidateCount: 0,
+			selectedCount: 0,
+		};
 	}
-})();
+}
+
+if (import.meta.main) {
+	run({
+		city: getArg("--city"),
+		title: getArg("--title"),
+		futureOnly: hasFlag("--include-past") ? false : undefined,
+		greedyNonOverlap: hasFlag("--greedy-non-overlap") || undefined,
+		calendarPath: getArg("--calendar"),
+		geocodeCachePath: getArg("--geocode-cache"),
+		responsePath: getArg("--response"),
+		htmlPath: getArg("--html"),
+		dataPath: getArg("--data"),
+		avgSpeedKmh: getArg("--avg-speed-kmh")
+			? Number(getArg("--avg-speed-kmh"))
+			: undefined,
+		tzOffset: getArg("--tz-offset"),
+		minPriorityScore: getArg("--min-priority-score")
+			? Number(getArg("--min-priority-score"))
+			: undefined,
+		noOpen: hasFlag("--no-open"),
+	}).catch((err: unknown) => {
+		console.error(err);
+		process.exit(1);
+	});
+}

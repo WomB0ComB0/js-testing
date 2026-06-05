@@ -49,5 +49,7 @@ resume.md
 afro*
 ui-captures/
 *.har
-itinerary.data.js
-itinerary-boston.data.js
+
+# tech-week pipeline: outputs ignored, configs tracked
+tech-week/out/
+!tech-week/configs/*.json

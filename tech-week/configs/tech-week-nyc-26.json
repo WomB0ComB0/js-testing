@@ -1,0 +1,17 @@
+{
+  "slug": "tech-week-nyc-26",
+  "city": "NYC",
+  "timezone": "America/New_York",
+  "source": {
+    "type": "har",
+    "file": "www.tech-week.com.har"
+  },
+  "filter": {
+    "minPriorityScore": 3
+  },
+  "itinerary": {
+    "avgSpeedKmh": 18,
+    "durationMin": 120,
+    "maxCandidates": 100
+  }
+}

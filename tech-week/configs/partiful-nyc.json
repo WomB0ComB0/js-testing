@@ -1,0 +1,17 @@
+{
+  "slug": "partiful-nyc",
+  "city": "NYC",
+  "title": "Tech Events",
+  "timezone": "America/New_York",
+  "source": {
+    "type": "partiful-explore",
+    "region": "NYC"
+  },
+  "filter": {
+    "minPriorityScore": 0
+  },
+  "itinerary": {
+    "avgSpeedKmh": 18,
+    "durationMin": 120
+  }
+}

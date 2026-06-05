@@ -1,0 +1,17 @@
+{
+  "slug": "all-nyc",
+  "city": "NYC",
+  "title": "All NYC Events",
+  "timezone": "America/New_York",
+  "source": {
+    "type": "merge",
+    "sources": ["luma-nyc", "partiful-nyc", "tech-week-nyc-26"]
+  },
+  "filter": {
+    "minPriorityScore": 1
+  },
+  "itinerary": {
+    "avgSpeedKmh": 18,
+    "durationMin": 120
+  }
+}

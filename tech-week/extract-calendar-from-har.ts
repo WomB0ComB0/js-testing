@@ -104,8 +104,37 @@ function decodeContent(content: HarEntry["response"] extends infer R
 	return text;
 }
 
-async function main(): Promise<void> {
-	const { har, out } = parseArgs(process.argv.slice(2));
+export interface RunOptions {
+	/** Path to the captured HAR file. */
+	harPath: string;
+	/** Output calendar.json path. Defaults next to the HAR. */
+	outPath?: string;
+}
+
+export interface RunResult {
+	outPath: string;
+	pagesCaptured: number;
+	reportedTotal: number;
+	uniqueEventCount: number;
+	cities: string[];
+}
+
+function deriveOutPath(harPath: string): string {
+	return join(
+		dirname(harPath),
+		`${basename(harPath, ".har")
+			.replace(/^www\./, "")
+			.replace(/\.com$/, "")
+			.replace(/[^A-Za-z0-9-]/g, "-")}-calendar.json`,
+	);
+}
+
+export async function run(options: RunOptions): Promise<RunResult> {
+	const har = resolve(options.harPath);
+	const out =
+		options.outPath !== undefined
+			? resolve(options.outPath)
+			: deriveOutPath(har);
 
 	const harBlob = await Bun.file(har).json();
 	const entries: HarEntry[] = harBlob?.log?.entries ?? [];
@@ -171,9 +200,20 @@ async function main(): Promise<void> {
 			`  pagesCaptured=${pagesCaptured} reportedTotal=${reportedTotal} ` +
 			`unique=${events.length} cities=${[...cities].join(",")}`,
 	);
+
+	return {
+		outPath: out,
+		pagesCaptured,
+		reportedTotal,
+		uniqueEventCount: events.length,
+		cities: [...cities],
+	};
 }
 
-main().catch((err) => {
-	console.error(err);
-	process.exit(1);
-});
+if (import.meta.main) {
+	const { har, out } = parseArgs(process.argv.slice(2));
+	run({ harPath: har, outPath: out }).catch((err) => {
+		console.error(err);
+		process.exit(1);
+	});
+}

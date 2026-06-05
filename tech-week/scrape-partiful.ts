@@ -13,28 +13,31 @@
 
 import { join, resolve } from "node:path";
 import { z } from "zod";
+import { getArg, hasFlag } from "./lib/cli.js";
+import { fetchHtml } from "./lib/fetch.js";
+import { pool } from "./lib/pool.js";
+import { buildScorer } from "./lib/scoring.js";
 
 // ---------------------------------------------------------------------------
-// CLI args
+// Options
 // ---------------------------------------------------------------------------
 
-function getArg(flag: string): string | undefined {
-	const idx = process.argv.indexOf(flag);
-	if (idx === -1) return undefined;
-	const next = process.argv[idx + 1];
-	if (!next || next.startsWith("--")) return undefined;
-	return next;
+export interface RunOptions {
+	calendarPath?: string;
+	priorityPath?: string;
+	city?: string;
+	/** Force re-fetch of events that already have a description. */
+	refresh?: boolean;
 }
 
-// Paths resolve relative to this script so it works from any CWD.
-const SCRIPT_DIR = import.meta.dir;
-const CALENDAR_FILE = resolve(
-	getArg("--calendar") ?? join(SCRIPT_DIR, "tech-week-calendar.json"),
-);
-const PRIORITY_FILE = resolve(
-	getArg("--priority") ?? join(SCRIPT_DIR, "tech-week-priority.md"),
-);
-const CITY_LABEL = getArg("--city") ?? "NYC";
+export interface RunResult {
+	calendarPath: string;
+	priorityPath: string;
+	totalEvents: number;
+	partifulLinked: number;
+	withDescription: number;
+	rankedCount: number;
+}
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -185,43 +188,92 @@ function extractDescription(html: string): string | null {
 	return null;
 }
 
-// ---------------------------------------------------------------------------
-// Fetch with timeout
-// ---------------------------------------------------------------------------
+interface PartifulLocationInfo {
+	neighborhood?: string;
+	mapsInfo?: {
+		appleMapsUrl?: string;
+		googleMapsUrl?: string;
+		addressLines?: string[];
+		approximateLocation?: string;
+	};
+}
 
-async function fetchHtml(url: string): Promise<string | null> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+/**
+ * Pulls the structured location data Partiful embeds in `__NEXT_DATA__`.
+ * Used to upgrade tech-week.com's borough-level labels ("Brooklyn",
+ * "Midtown") to specific neighborhoods ("Hell's Kitchen", "DUMBO"), harvest
+ * the 2-decimal `sll=` coords as a free fallback, and extract the full
+ * street address so downstream geocoding can pin to building level.
+ */
+function extractPartifulLocation(html: string): {
+	neighborhood: string | null;
+	coords: { lat: number; lng: number } | null;
+	address: string | null;
+} {
+	const result = {
+		neighborhood: null as string | null,
+		coords: null as { lat: number; lng: number } | null,
+		address: null as string | null,
+	};
+	const m = html.match(
+		/<script[^>]+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/,
+	);
+	if (!m) return result;
 	try {
-		const response = await fetch(url, {
-			headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
-			signal: controller.signal,
-		});
-		if (!response.ok) {
-			console.warn(`  HTTP ${response.status} on ${url}`);
-			return null;
+		const data = JSON.parse(m[1]) as {
+			props?: {
+				pageProps?: { event?: { locationInfo?: PartifulLocationInfo } };
+			};
+		};
+		const li = data.props?.pageProps?.event?.locationInfo;
+		if (!li) return result;
+		if (li.neighborhood && typeof li.neighborhood === "string") {
+			result.neighborhood = li.neighborhood.trim();
 		}
-		return await response.text();
-	} catch (error) {
-		console.warn(`  fetch failed for ${url}:`, (error as Error).message);
-		return null;
-	} finally {
-		clearTimeout(timer);
+		const sll = li.mapsInfo?.appleMapsUrl?.match(
+			/sll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+		);
+		if (sll) {
+			const lat = Number(sll[1]);
+			const lng = Number(sll[2]);
+			if (Number.isFinite(lat) && Number.isFinite(lng)) {
+				result.coords = { lat, lng };
+			}
+		}
+		// Address harvest — preferred over sll because Google Maps geocoding
+		// against a real street address resolves to building-level (~10m)
+		// vs partiful's truncated 2-decimal sll (~1km).
+		const lines = li.mapsInfo?.addressLines;
+		if (Array.isArray(lines) && lines.length > 0) {
+			const joined = lines
+				.filter((s) => typeof s === "string" && s.trim().length > 0)
+				.join(", ")
+				.trim();
+			if (joined) result.address = joined;
+		} else if (li.mapsInfo?.googleMapsUrl) {
+			const q = li.mapsInfo.googleMapsUrl.match(/[?&]query=([^&]+)/);
+			if (q) {
+				try {
+					const decoded = decodeURIComponent(q[1]).trim();
+					if (decoded) result.address = decoded;
+				} catch {
+					// malformed url-encoding — skip
+				}
+			}
+		}
+	} catch {
+		// malformed JSON — ignore
 	}
+	return result;
 }
 
 // ---------------------------------------------------------------------------
-// Priority scoring
+// Priority scoring — keeps its own broader keyword list (PRIORITY_KEYWORDS
+// above) because tech-week.com is already filtered to tech events, so recall
+// matters more than precision. Engine itself is shared via lib/scoring.ts.
 // ---------------------------------------------------------------------------
 
-function escapeRegex(s: string): string {
-	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-const PRIORITY_REGEXES = PRIORITY_KEYWORDS.map((kw) => ({
-	kw,
-	re: new RegExp(`\\b${escapeRegex(kw)}\\b`, "i"),
-}));
+const scorer = buildScorer(PRIORITY_KEYWORDS);
 
 function scoreableText(event: EnrichedEvent): string {
 	const parts = [
@@ -237,50 +289,28 @@ function scoreEvent(event: EnrichedEvent): {
 	score: number;
 	matches: string[];
 } {
-	const text = scoreableText(event);
-	const matches: string[] = [];
-	for (const { kw, re } of PRIORITY_REGEXES) {
-		if (re.test(text)) matches.push(kw);
-	}
-	return { score: matches.length, matches };
-}
-
-// ---------------------------------------------------------------------------
-// Concurrency pool
-// ---------------------------------------------------------------------------
-
-async function pool<T>(
-	items: T[],
-	concurrency: number,
-	worker: (item: T, index: number) => Promise<void>,
-): Promise<void> {
-	let cursor = 0;
-	const total = items.length;
-	const runners = Array.from({ length: concurrency }, async (_, workerId) => {
-		while (cursor < total) {
-			const index = cursor;
-			cursor += 1;
-			if (PER_WORKER_DELAY_MS > 0 && workerId > 0) {
-				await new Promise((r) => setTimeout(r, PER_WORKER_DELAY_MS));
-			}
-			await worker(items[index], index);
-		}
-	});
-	await Promise.all(runners);
+	return scorer.score(scoreableText(event));
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-(async () => {
-	const refresh = process.argv.includes("--refresh");
+export async function run(options: RunOptions = {}): Promise<RunResult> {
+	const scriptDir = import.meta.dir;
+	const calendarPath = resolve(
+		options.calendarPath ?? join(scriptDir, "tech-week-calendar.json"),
+	);
+	const priorityPath = resolve(
+		options.priorityPath ?? join(scriptDir, "tech-week-priority.md"),
+	);
+	const cityLabel = options.city ?? "NYC";
+	const refresh = options.refresh ?? false;
 
-	const raw = await Bun.file(CALENDAR_FILE).json();
+	const raw = await Bun.file(calendarPath).json();
 	const parsed = FileSchema.safeParse(raw);
 	if (!parsed.success) {
-		console.error("Schema mismatch:", parsed.error);
-		process.exit(1);
+		throw new Error(`Schema mismatch in ${calendarPath}: ${parsed.error}`);
 	}
 	const data = parsed.data;
 
@@ -298,25 +328,47 @@ async function pool<T>(
 	let ok = 0;
 	let failed = 0;
 
-	await pool(needsFetch, CONCURRENCY, async (event) => {
-		if (!event.externalHref) return;
-		const html = await fetchHtml(event.externalHref);
-		if (html) {
-			const desc = extractDescription(html);
-			event.description = desc;
-			if (desc) ok += 1;
-			else failed += 1;
-		} else {
-			event.description = null;
-			failed += 1;
-		}
-		done += 1;
-		if (done % 50 === 0 || done === needsFetch.length) {
-			console.log(
-				`  progress: ${done}/${needsFetch.length}  (ok=${ok} failed=${failed})`,
-			);
-		}
-	});
+	await pool(
+		needsFetch,
+		{ concurrency: CONCURRENCY, perWorkerDelayMs: PER_WORKER_DELAY_MS },
+		async (event) => {
+			if (!event.externalHref) return;
+			const html = await fetchHtml(event.externalHref, {
+				timeoutMs: REQUEST_TIMEOUT_MS,
+				userAgent: USER_AGENT,
+			});
+			if (html) {
+				const desc = extractDescription(html);
+				event.description = desc;
+				// Geo-refinement: upgrade tech-week.com's borough-level label
+				// to Partiful's specific neighborhood and stamp exact coords
+				// when the host published an address. Splits 357 "Midtown"
+				// pins into distinct sub-neighborhood points.
+				const loc = extractPartifulLocation(html);
+				if (loc.neighborhood) {
+					(event as { location?: string | null }).location = loc.neighborhood;
+				}
+				if (loc.coords) {
+					(event as { coords?: { lat: number; lng: number } }).coords =
+						loc.coords;
+				}
+				if (loc.address) {
+					(event as { address?: string }).address = loc.address;
+				}
+				if (desc) ok += 1;
+				else failed += 1;
+			} else {
+				event.description = null;
+				failed += 1;
+			}
+			done += 1;
+			if (done % 50 === 0 || done === needsFetch.length) {
+				console.log(
+					`  progress: ${done}/${needsFetch.length}  (ok=${ok} failed=${failed})`,
+				);
+			}
+		},
+	);
 
 	// Score every event (cheap and idempotent, run on all events)
 	for (const event of data.events) {
@@ -331,8 +383,8 @@ async function pool<T>(
 		enrichedAt: new Date().toISOString(),
 		priorityKeywords: PRIORITY_KEYWORDS,
 	};
-	await Bun.write(CALENDAR_FILE, JSON.stringify(output, null, 2));
-	console.log(`Wrote ${CALENDAR_FILE}`);
+	await Bun.write(calendarPath, JSON.stringify(output, null, 2));
+	console.log(`Wrote ${calendarPath}`);
 
 	// Top-N markdown report
 	const ranked = [...data.events]
@@ -340,7 +392,7 @@ async function pool<T>(
 		.sort((a, b) => (b.priorityScore ?? 0) - (a.priorityScore ?? 0))
 		.slice(0, TOP_N);
 
-	let md = `# ${CITY_LABEL} Tech Week 2026 — Top ${ranked.length} Events by Priority\n\n`;
+	let md = `# ${cityLabel} Tech Week 2026 — Top ${ranked.length} Events by Priority\n\n`;
 	md += `Generated ${new Date().toISOString()}\n`;
 	md += `Keywords: ${PRIORITY_KEYWORDS.join(", ")}\n\n`;
 	md += `| Score | Date | Time | Name | Location | Matched | Link |\n`;
@@ -353,11 +405,32 @@ async function pool<T>(
 		};
 		md += `| ${e.priorityScore} | ${row.date ?? ""} | ${row.time ?? ""} | ${row.name.replace(/\|/g, "\\|")} | ${row.location ?? ""} | ${(e.priorityMatches ?? []).join(", ")} | ${row.externalHref ?? ""} |\n`;
 	}
-	await Bun.write(PRIORITY_FILE, md);
-	console.log(`Wrote ${PRIORITY_FILE} (${ranked.length} ranked events)`);
+	await Bun.write(priorityPath, md);
+	console.log(`Wrote ${priorityPath} (${ranked.length} ranked events)`);
 
 	const withDesc = data.events.filter((e) => !!e.description).length;
 	console.log(
 		`\nSummary: ${withDesc}/${data.events.length} events now have descriptions.`,
 	);
-})();
+
+	return {
+		calendarPath,
+		priorityPath,
+		totalEvents: data.events.length,
+		partifulLinked: partiful.length,
+		withDescription: withDesc,
+		rankedCount: ranked.length,
+	};
+}
+
+if (import.meta.main) {
+	run({
+		calendarPath: getArg("--calendar"),
+		priorityPath: getArg("--priority"),
+		city: getArg("--city"),
+		refresh: hasFlag("--refresh"),
+	}).catch((err: unknown) => {
+		console.error(err);
+		process.exit(1);
+	});
+}

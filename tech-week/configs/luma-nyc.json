@@ -1,0 +1,17 @@
+{
+  "slug": "luma-nyc",
+  "city": "NYC",
+  "title": "Tech Events",
+  "timezone": "America/New_York",
+  "source": {
+    "type": "luma-discover",
+    "discoverSlug": "nyc"
+  },
+  "filter": {
+    "minPriorityScore": 1
+  },
+  "itinerary": {
+    "avgSpeedKmh": 18,
+    "durationMin": 120
+  }
+}

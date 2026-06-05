@@ -1,0 +1,19 @@
+{
+  "slug": "tech-week-boston-26",
+  "city": "Boston",
+  "timezone": "America/New_York",
+  "source": {
+    "type": "har",
+    "file": "www.tech-week-boston.com.har"
+  },
+  "filter": {
+    "minPriorityScore": 3,
+    "since": "2026-05-26",
+    "until": "2026-05-31"
+  },
+  "itinerary": {
+    "avgSpeedKmh": 18,
+    "durationMin": 120,
+    "maxCandidates": 100
+  }
+}
