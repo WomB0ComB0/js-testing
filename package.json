@@ -84,7 +84,7 @@
 		"string-similarity": "^4.0.4",
 		"tweetsodium": "^0.0.6",
 		"twitter-api-v2": "^1.25.0",
-		"uuid": "^11.1.0",
+		"uuid": "^14.0.0",
 		"winston": "^3.17.0",
 		"xls-parser": "^3.1.0",
 		"xlsx": "^0.18.5",
