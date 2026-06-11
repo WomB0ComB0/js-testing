@@ -63,7 +63,7 @@
 		"geofirestore": "^5.2.0",
 		"glob": "^11.0.3",
 		"googleapis": "^149.0.0",
-		"ical-generator": "^9.0.0",
+		"ical-generator": "^10.2.0",
 		"icalts": "^0.0.2",
 		"jsonwebtoken": "^9.0.2",
 		"jszip": "^3.10.1",
